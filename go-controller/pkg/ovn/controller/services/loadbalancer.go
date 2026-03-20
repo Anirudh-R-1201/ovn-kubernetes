@@ -56,6 +56,11 @@ type LBOpts struct {
 
 	// Only useful for template LBs.
 	AddressFamily corev1.IPFamily
+
+	// TopoAware marks this LB as topology-aware (zone-local endpoints preferred).
+	// When set, OVN uses (ip_src, ip_dst) selection fields so that ECMP hashing
+	// is stable per source-IP pair, ensuring consistent routing within a zone.
+	TopoAware bool
 }
 
 type Addr struct {
@@ -361,18 +366,25 @@ func buildLB(lb *LB) *templateLoadBalancer {
 		"hairpin_snat_ip":    fmt.Sprintf("%s %s", config.Gateway.MasqueradeIPs.V4OVNServiceHairpinMasqueradeIP.String(), config.Gateway.MasqueradeIPs.V6OVNServiceHairpinMasqueradeIP.String()),
 	}
 
-	// Session affinity
-	// If enabled, then bucket flows by 3-tuple (proto, srcip, dstip) for the specific timeout value
-	// otherwise, use default ovn value
+	// Session affinity / topology-aware ECMP selection fields.
+	// Both session-affinity (max timeout) and topology-aware LBs use (ip_src, ip_dst)
+	// hashing so that a given client always lands on the same zone-local backend.
 	selectionFields := []nbdb.LoadBalancerSelectionFields{}
 	if lb.Opts.AffinityTimeOut > 0 {
 		if lb.Opts.AffinityTimeOut != core.MaxClientIPServiceAffinitySeconds {
 			options["affinity_timeout"] = fmt.Sprintf("%d", lb.Opts.AffinityTimeOut)
 		} else {
-			selectionFields = []string{
+			selectionFields = []nbdb.LoadBalancerSelectionFields{
 				nbdb.LoadBalancerSelectionFieldsIPSrc,
 				nbdb.LoadBalancerSelectionFieldsIPDst,
 			}
+		}
+	} else if lb.Opts.TopoAware {
+		// For topology-aware LBs, use (ip_src, ip_dst) ECMP hashing so that
+		// clients consistently hit the same zone-local backend across reconnects.
+		selectionFields = []nbdb.LoadBalancerSelectionFields{
+			nbdb.LoadBalancerSelectionFieldsIPSrc,
+			nbdb.LoadBalancerSelectionFieldsIPDst,
 		}
 	}
 

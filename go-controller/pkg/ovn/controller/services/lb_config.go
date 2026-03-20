@@ -41,9 +41,24 @@ type lbConfig struct {
 	internalTrafficLocal bool
 	// indicates if this LB is configuring service of type NodePort.
 	hasNodePort bool
+
+	// preferLocalEndpoints is true when the topology-aware LB feature is
+	// enabled and the Service carries the
+	// "service.kubernetes.io/topology-mode: Auto" annotation.
+	// When set, buildPerNodeLBs will build a per-node LB whose backend pool
+	// is restricted to endpoints located in the same topology zone as the
+	// node, falling back to cluster-wide endpoints when the zone has no
+	// healthy backends.
+	preferLocalEndpoints bool
 }
 
-func makeNodeSwitchTargetIPs(node string, c *lbConfig) (targetIPsV4, targetIPsV6 []string, v4Changed, v6Changed bool) {
+// makeNodeSwitchTargetIPs returns the switch-side backend IPs for node, applying
+// traffic-policy and topology-aware filtering in priority order:
+//  1. ETP=Local / ITP=Local  → node-local endpoints only (existing behaviour)
+//  2. preferLocalEndpoints   → zone-local endpoints from zoneEndpoints, with
+//     automatic fall-back to cluster-wide when the zone is empty
+//  3. default               → cluster-wide endpoints (unchanged)
+func makeNodeSwitchTargetIPs(node string, c *lbConfig, zoneEndpoints util.LBEndpoints) (targetIPsV4, targetIPsV6 []string, v4Changed, v6Changed bool) {
 	targetIPsV4 = c.clusterEndpoints.V4IPs
 	targetIPsV6 = c.clusterEndpoints.V6IPs
 
@@ -59,6 +74,12 @@ func makeNodeSwitchTargetIPs(node string, c *lbConfig) (targetIPsV4, targetIPsV6
 		}
 		targetIPsV4 = localIPsV4
 		targetIPsV6 = localIPsV6
+	} else if c.preferLocalEndpoints && (len(zoneEndpoints.V4IPs)+len(zoneEndpoints.V6IPs) > 0) {
+		// Topology-aware: use same-zone endpoints. The caller guarantees that
+		// zoneEndpoints is non-empty only when the zone actually has healthy
+		// backends, so no additional fall-back is needed here.
+		targetIPsV4 = zoneEndpoints.V4IPs
+		targetIPsV6 = zoneEndpoints.V6IPs
 	}
 
 	// Local endpoints are a subset of cluster endpoints, so it is enough to compare their length
@@ -139,8 +160,33 @@ func buildServiceLBConfigs(service *corev1.Service, endpointSlices []*discovery.
 	for _, n := range nodeInfos {
 		nodes.Insert(n.name)
 	}
-	// get all the endpoints classified by port and by port,node
-	needsLocalEndpoints := util.ServiceExternalTrafficPolicyLocal(service) || util.ServiceInternalTrafficPolicyLocal(service)
+
+	// Service-level traffic policies (same for every port — evaluated once).
+	externalTrafficLocal := util.ServiceExternalTrafficPolicyLocal(service)
+	internalTrafficLocal := util.ServiceInternalTrafficPolicyLocal(service)
+
+	// Determine whether topology-aware LBs are needed for this service.
+	// Conditions (all must hold):
+	//   1. Feature gate --enable-topology-aware-lb is on.
+	//   2. At least one node in the zone carries a topology.kubernetes.io/zone label.
+	//   3. The service opts in via annotation "service.kubernetes.io/topology-mode: Auto".
+	//   4. Neither ETP nor ITP is Local (they already have their own per-node mechanism).
+	preferLocalEndpoints := false
+	if config.OVNKubernetesFeature.EnableTopologyAwareLB && service != nil &&
+		service.Annotations["service.kubernetes.io/topology-mode"] == "Auto" &&
+		!externalTrafficLocal && !internalTrafficLocal {
+		for _, n := range nodeInfos {
+			if n.topologyZone != "" {
+				preferLocalEndpoints = true
+				break
+			}
+		}
+	}
+
+	// get all the endpoints classified by port and by port,node.
+	// needsLocalEndpoints must be true whenever we need per-node endpoint data —
+	// that includes topology-aware mode, which uses nodeEndpoints to compute zone sets.
+	needsLocalEndpoints := externalTrafficLocal || internalTrafficLocal || preferLocalEndpoints
 	portToClusterEndpoints, portToNodeToEndpoints, err := util.GetEndpointsForService(endpointSlices, service, nodes, true, needsLocalEndpoints)
 	if err != nil {
 		if service != nil {
@@ -156,9 +202,6 @@ func buildServiceLBConfigs(service *corev1.Service, endpointSlices []*discovery.
 		if nodeEndpoints == nil {
 			nodeEndpoints = make(map[string]util.LBEndpoints)
 		}
-		// if ExternalTrafficPolicy or InternalTrafficPolicy is local, then we need to do things a bit differently
-		externalTrafficLocal := util.ServiceExternalTrafficPolicyLocal(service)
-		internalTrafficLocal := util.ServiceInternalTrafficPolicyLocal(service)
 
 		// NodePort services get a per-node load balancer, but with the node's physical IP as the vip
 		// Thus, the vip "node" will be expanded later.
@@ -174,9 +217,9 @@ func buildServiceLBConfigs(service *corev1.Service, endpointSlices []*discovery.
 				internalTrafficLocal: false, // always false for non-ClusterIPs
 				hasNodePort:          true,
 			}
-			// Only "plain" NodePort services (no ETP, no affinity timeout)
+			// Only "plain" NodePort services (no ETP, no affinity timeout, no topo-aware)
 			// can use load balancer templates.
-			if !useLBGroup || !useTemplates || externalTrafficLocal || needsAffinityTimeout {
+			if !useLBGroup || !useTemplates || externalTrafficLocal || needsAffinityTimeout || preferLocalEndpoints {
 				perNodeConfigs = append(perNodeConfigs, nodePortLBConfig)
 			} else {
 				templateConfigs = append(templateConfigs, nodePortLBConfig)
@@ -217,15 +260,17 @@ func buildServiceLBConfigs(service *corev1.Service, endpointSlices []*discovery.
 			externalTrafficLocal: false, // always false for ClusterIPs
 			internalTrafficLocal: internalTrafficLocal,
 			hasNodePort:          false,
+			preferLocalEndpoints: preferLocalEndpoints,
 		}
 
 		// Normally, the ClusterIP LB is global (on all node switches and routers),
 		// unless any of the following are true:
 		// - Any of the endpoints are host-network
-		// - ETP=local service backed by non-local-host-networked endpoints
+		// - ITP=Local (remove non-local endpoints per-node)
+		// - Topology-aware mode (backend pool differs per node)
 		//
-		// In that case, we need to create per-node LBs.
-		if hasHostEndpoints(clusterEndpoints.V4IPs) || hasHostEndpoints(clusterEndpoints.V6IPs) || internalTrafficLocal {
+		// In those cases, we need per-node LBs.
+		if hasHostEndpoints(clusterEndpoints.V4IPs) || hasHostEndpoints(clusterEndpoints.V6IPs) || internalTrafficLocal || preferLocalEndpoints {
 			perNodeConfigs = append(perNodeConfigs, clusterIPConfig)
 		} else {
 			clusterConfigs = append(clusterConfigs, clusterIPConfig)
@@ -420,7 +465,8 @@ func buildTemplateLBs(service *corev1.Service, configs []lbConfig, nodes []nodeI
 
 				for _, node := range nodes {
 
-					switchV4TargetIPs, switchV6TargetIPs, v4Changed, v6Changed := makeNodeSwitchTargetIPs(node.name, &cfg)
+					// Template LBs never have preferLocalEndpoints=true, so zoneEndpoints is empty.
+					switchV4TargetIPs, switchV6TargetIPs, v4Changed, v6Changed := makeNodeSwitchTargetIPs(node.name, &cfg, util.LBEndpoints{})
 					if !switchV4TargetNeedsTemplate && v4Changed {
 						switchV4TargetNeedsTemplate = true
 					}
@@ -587,6 +633,40 @@ func buildTemplateLBs(service *corev1.Service, configs []lbConfig, nodes []nodeI
 // - services with external IPs / LoadBalancer Status IPs
 //
 // HOWEVER, we need to replace, on each nodes gateway router only, any host-network endpoints with a special loopback address
+// buildZoneEndpoints merges the per-node endpoint pools for all nodes that
+// belong to zone into a single deduplicated LBEndpoints value.
+// Returns an empty LBEndpoints when zone is "" or no nodes in the zone have
+// endpoints, so callers can fall back to cluster-wide endpoints.
+func buildZoneEndpoints(zone string, nodes []nodeInfo, nodeEndpoints map[string]util.LBEndpoints, port int32) util.LBEndpoints {
+	if zone == "" {
+		return util.LBEndpoints{}
+	}
+	seen := sets.New[string]()
+	result := util.LBEndpoints{Port: port}
+	for _, n := range nodes {
+		if n.topologyZone != zone {
+			continue
+		}
+		eps, ok := nodeEndpoints[n.name]
+		if !ok {
+			continue
+		}
+		for _, ip := range eps.V4IPs {
+			if !seen.Has(ip) {
+				seen.Insert(ip)
+				result.V4IPs = append(result.V4IPs, ip)
+			}
+		}
+		for _, ip := range eps.V6IPs {
+			if !seen.Has(ip) {
+				seen.Insert(ip)
+				result.V6IPs = append(result.V6IPs, ip)
+			}
+		}
+	}
+	return result
+}
+
 // see https://github.com/ovn-org/ovn-kubernetes/blob/master/docs/design/host_to_services_OpenFlow.md
 // This is for host -> serviceip -> host hairpin
 //
@@ -618,8 +698,16 @@ func buildPerNodeLBs(service *corev1.Service, configs []lbConfig, nodes []nodeIn
 			switchRules := make([]LBRule, 0, len(configs))
 
 			for _, cfg := range configs {
+				// For topology-aware configs, compute the union of endpoints
+				// for nodes that share this node's topology zone.  If the zone
+				// has no healthy backends, buildZoneEndpoints returns an empty
+				// set and makeNodeSwitchTargetIPs falls back to clusterEndpoints.
+				var zoneEps util.LBEndpoints
+				if cfg.preferLocalEndpoints {
+					zoneEps = buildZoneEndpoints(node.topologyZone, nodes, cfg.nodeEndpoints, cfg.clusterEndpoints.Port)
+				}
 
-				switchV4TargetIPs, switchV6TargetIPs, _, _ := makeNodeSwitchTargetIPs(node.name, &cfg)
+				switchV4TargetIPs, switchV6TargetIPs, _, _ := makeNodeSwitchTargetIPs(node.name, &cfg, zoneEps)
 
 				routerV4TargetIPs, routerV6TargetIPs, _, _ := makeNodeRouterTargetIPs(
 					&node,
@@ -676,6 +764,17 @@ func buildPerNodeLBs(service *corev1.Service, configs []lbConfig, nodes []nodeIn
 							Source:  Addr{IP: vip, Port: cfg.inport},
 							Targets: targetsITP,
 						})
+					} else if cfg.preferLocalEndpoints && util.IsClusterIP(vip) {
+						// Topology-aware: use zone-filtered targets (held in switchV4/V6TargetIPs
+						// after makeNodeSwitchTargetIPs applied the zone preference).
+						topoTargets := joinHostsPort(switchV4TargetIPs, cfg.clusterEndpoints.Port)
+						if isv6 {
+							topoTargets = joinHostsPort(switchV6TargetIPs, cfg.clusterEndpoints.Port)
+						}
+						switchRules = append(switchRules, LBRule{
+							Source:  Addr{IP: vip, Port: cfg.inport},
+							Targets: topoTargets,
+						})
 					} else {
 						switchRules = append(switchRules, LBRule{
 							Source:  Addr{IP: vip, Port: cfg.inport},
@@ -705,47 +804,65 @@ func buildPerNodeLBs(service *corev1.Service, configs []lbConfig, nodes []nodeIn
 				}
 			}
 
+			// Determine whether any config in this proto bucket requested topo-aware mode.
+			// We mark the OVN LB so buildLB() can set the right selection_fields.
+			protoTopoAware := false
+			for _, cfg := range configs {
+				if cfg.preferLocalEndpoints {
+					protoTopoAware = true
+					break
+				}
+			}
+
 			// If switch and router rules are identical, coalesce
 			if reflect.DeepEqual(switchRules, routerRules) && len(switchRules) > 0 && node.gatewayRouterName != "" {
+				opts := lbOpts(service)
+				opts.TopoAware = protoTopoAware
 				out = append(out, LB{
 					Name:        makeLBNameForNetwork(service, proto, "node_router+switch_"+node.name, netInfo),
 					Protocol:    string(proto),
 					ExternalIDs: eids,
-					Opts:        lbOpts(service),
+					Opts:        opts,
 					Routers:     []string{node.gatewayRouterName},
 					Switches:    []string{node.switchName},
 					Rules:       routerRules,
 				})
 			} else {
 				if len(routerRules) > 0 && node.gatewayRouterName != "" {
+					opts := lbOpts(service)
+					opts.TopoAware = protoTopoAware
 					out = append(out, LB{
 						Name:        makeLBNameForNetwork(service, proto, "node_router_"+node.name, netInfo),
 						Protocol:    string(proto),
 						ExternalIDs: eids,
-						Opts:        lbOpts(service),
+						Opts:        opts,
 						Routers:     []string{node.gatewayRouterName},
 						Rules:       routerRules,
 					})
 				}
 				if len(noSNATRouterRules) > 0 && node.gatewayRouterName != "" {
+					opts := lbOpts(service)
+					opts.SkipSNAT = true
+					opts.TopoAware = protoTopoAware
 					lb := LB{
 						Name:        makeLBNameForNetwork(service, proto, "node_local_router_"+node.name, netInfo),
 						Protocol:    string(proto),
 						ExternalIDs: eids,
-						Opts:        lbOpts(service),
+						Opts:        opts,
 						Routers:     []string{node.gatewayRouterName},
 						Rules:       noSNATRouterRules,
 					}
-					lb.Opts.SkipSNAT = true
 					out = append(out, lb)
 				}
 
 				if len(switchRules) > 0 {
+					opts := lbOpts(service)
+					opts.TopoAware = protoTopoAware
 					out = append(out, LB{
 						Name:        makeLBNameForNetwork(service, proto, "node_switch_"+node.name, netInfo),
 						Protocol:    string(proto),
 						ExternalIDs: eids,
-						Opts:        lbOpts(service),
+						Opts:        opts,
 						Switches:    []string{node.switchName},
 						Rules:       switchRules,
 					})

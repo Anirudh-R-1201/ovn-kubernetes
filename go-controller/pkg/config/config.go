@@ -473,8 +473,15 @@ type OVNKubernetesFeatureConfig struct {
 	EnablePersistentIPs             bool `gcfg:"enable-persistent-ips"`
 	EnableDNSNameResolver           bool `gcfg:"enable-dns-name-resolver"`
 	EnableServiceTemplateSupport    bool `gcfg:"enable-svc-template-support"`
-	EnableObservability             bool `gcfg:"enable-observability"`
-	EnableNetworkQoS                bool `gcfg:"enable-network-qos"`
+	// EnableTopologyAwareLB enables the topology-aware load balancer feature.
+	// When enabled, ClusterIP services annotated with
+	// "service.kubernetes.io/topology-mode: Auto" will have per-node OVN LBs
+	// whose backend pool is filtered to endpoints in the same topology zone
+	// (topology.kubernetes.io/zone), falling back to cluster-wide endpoints
+	// when the local zone has no healthy backends.
+	EnableTopologyAwareLB bool `gcfg:"enable-topology-aware-lb"`
+	EnableObservability   bool `gcfg:"enable-observability"`
+	EnableNetworkQoS      bool `gcfg:"enable-network-qos"`
 	// This feature requires a kernel fix https://github.com/torvalds/linux/commit/7f3287db654395f9c5ddd246325ff7889f550286
 	// to work on a kind cluster. Flag allows to disable it for current CI, will be turned on when github runners have this fix.
 	AdvertisedUDNIsolationMode string `gcfg:"advertised-udn-isolation-mode"`
@@ -1229,6 +1236,15 @@ var OVNK8sFeatureFlags = []cli.Flag{
 		Usage:       "Use svc-template with ovn-kubernetes.",
 		Destination: &cliConfig.OVNKubernetesFeature.EnableServiceTemplateSupport,
 		Value:       OVNKubernetesFeature.EnableServiceTemplateSupport,
+	},
+	&cli.BoolFlag{
+		Name: "enable-topology-aware-lb",
+		Usage: "Prefer same-zone endpoints for ClusterIP services annotated with " +
+			"'service.kubernetes.io/topology-mode: Auto'. " +
+			"Requires nodes to carry topology.kubernetes.io/zone labels. " +
+			"Falls back to cluster-wide endpoints when the local zone has no healthy backends.",
+		Destination: &cliConfig.OVNKubernetesFeature.EnableTopologyAwareLB,
+		Value:       OVNKubernetesFeature.EnableTopologyAwareLB,
 	},
 	&cli.BoolFlag{
 		Name:        "enable-observability",

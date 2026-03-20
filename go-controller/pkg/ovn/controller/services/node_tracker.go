@@ -54,11 +54,17 @@ type nodeInfo struct {
 	// if nodePort is disabled on this node?
 	nodePortDisabled bool
 
-	// The node's zone
+	// The node's OVN IC zone
 	zone string
 
 	// The list of node's management IPs
 	mgmtIPs []net.IP
+
+	// topologyZone is the value of the topology.kubernetes.io/zone node label.
+	// Used by the topology-aware LB feature to prefer same-zone endpoints.
+	topologyZone string
+	// topologyRegion is the value of the topology.kubernetes.io/region node label.
+	topologyRegion string
 }
 
 func (ni *nodeInfo) hostAddressesStr() []string {
@@ -117,13 +123,16 @@ func (nt *nodeTracker) Start(nodeInformer coreinformers.NodeInformer) (cache.Res
 			// - the `host-cidrs` annotation changed
 			// - node changes its zone
 			// - node becomes a hybrid overlay node from a ovn node or vice verse
-			// . No need to trigger update for any other field change.
+			// - topology zone/region labels changed (topology-aware LB)
+			// No need to trigger update for any other field change.
 			if util.NodeSubnetAnnotationChangedForNetwork(oldObj, newObj, nt.netInfo.GetNetworkName()) ||
 				util.NodeL3GatewayAnnotationChanged(oldObj, newObj) ||
 				oldObj.Name != newObj.Name ||
 				util.NodeHostCIDRsAnnotationChanged(oldObj, newObj) ||
 				util.NodeZoneAnnotationChanged(oldObj, newObj) ||
-				util.NoHostSubnet(oldObj) != util.NoHostSubnet(newObj) {
+				util.NoHostSubnet(oldObj) != util.NoHostSubnet(newObj) ||
+				oldObj.Labels[corev1.LabelTopologyZone] != newObj.Labels[corev1.LabelTopologyZone] ||
+				oldObj.Labels[corev1.LabelTopologyRegion] != newObj.Labels[corev1.LabelTopologyRegion] {
 				nt.updateNode(newObj)
 			}
 		},
@@ -149,7 +158,7 @@ func (nt *nodeTracker) Start(nodeInformer coreinformers.NodeInformer) (cache.Res
 
 // updateNodeInfo updates the node info cache, and syncs all services
 // if it changed.
-func (nt *nodeTracker) updateNodeInfo(nodeName, switchName, routerName, chassisID string, l3gatewayAddresses, hostAddresses []net.IP, podSubnets []*net.IPNet, mgmtIPs []net.IP, zone string, nodePortDisabled bool) {
+func (nt *nodeTracker) updateNodeInfo(nodeName, switchName, routerName, chassisID string, l3gatewayAddresses, hostAddresses []net.IP, podSubnets []*net.IPNet, mgmtIPs []net.IP, zone string, nodePortDisabled bool, topologyZone, topologyRegion string) {
 	ni := nodeInfo{
 		name:               nodeName,
 		l3gatewayAddresses: l3gatewayAddresses,
@@ -161,6 +170,8 @@ func (nt *nodeTracker) updateNodeInfo(nodeName, switchName, routerName, chassisI
 		chassisID:          chassisID,
 		nodePortDisabled:   nodePortDisabled,
 		zone:               zone,
+		topologyZone:       topologyZone,
+		topologyRegion:     topologyRegion,
 	}
 	for i := range podSubnets {
 		ni.podSubnets = append(ni.podSubnets, *podSubnets[i]) // de-pointer
@@ -269,6 +280,8 @@ func (nt *nodeTracker) updateNode(node *corev1.Node) {
 		mgmtIPs,
 		util.GetNodeZone(node),
 		!nodePortEnabled,
+		node.Labels[corev1.LabelTopologyZone],
+		node.Labels[corev1.LabelTopologyRegion],
 	)
 }
 
