@@ -4459,6 +4459,7 @@ func Test_makeNodeSwitchTargetIPs(t *testing.T) {
 		name                string
 		config              *lbConfig
 		node                string
+		zoneEndpoints       util.LBEndpoints
 		expectedTargetIPsV4 []string
 		expectedTargetIPsV6 []string
 		expectedV4Changed   bool
@@ -4562,10 +4563,52 @@ func Test_makeNodeSwitchTargetIPs(t *testing.T) {
 			expectedV4Changed:   true,
 			expectedV6Changed:   true,
 		},
+		// ---- topology-aware cases ----
+		{
+			name: "topo-aware: zone has endpoints — use zone pool",
+			config: &lbConfig{
+				vips:     []string{"1.2.3.4"},
+				protocol: corev1.ProtocolTCP,
+				inport:   80,
+				clusterEndpoints: util.LBEndpoints{
+					V4IPs: []string{"192.168.0.1", "192.168.1.1"},
+					Port:  8080,
+				},
+				preferLocalEndpoints: true,
+			},
+			node: nodeA,
+			zoneEndpoints: util.LBEndpoints{
+				V4IPs: []string{"192.168.0.1"}, // only zone-a endpoint
+				Port:  8080,
+			},
+			expectedTargetIPsV4: []string{"192.168.0.1"},
+			expectedTargetIPsV6: nil,
+			expectedV4Changed:   true, // reduced from 2 → 1
+			expectedV6Changed:   false,
+		},
+		{
+			name: "topo-aware: zone has no endpoints — fall back to cluster pool",
+			config: &lbConfig{
+				vips:     []string{"1.2.3.4"},
+				protocol: corev1.ProtocolTCP,
+				inport:   80,
+				clusterEndpoints: util.LBEndpoints{
+					V4IPs: []string{"192.168.0.1", "192.168.1.1"},
+					Port:  8080,
+				},
+				preferLocalEndpoints: true,
+			},
+			node:                nodeA,
+			zoneEndpoints:       util.LBEndpoints{}, // empty — no local backends
+			expectedTargetIPsV4: []string{"192.168.0.1", "192.168.1.1"},
+			expectedTargetIPsV6: nil,
+			expectedV4Changed:   false, // unchanged — full cluster pool used
+			expectedV6Changed:   false,
+		},
 	}
 	for i, tt := range tc {
 		t.Run(fmt.Sprintf("%d_%s", i, tt.name), func(t *testing.T) {
-			actualTargetIPsV4, actualTargetIPsV6, actualV4Changed, actualV6Changed := makeNodeSwitchTargetIPs(tt.node, tt.config)
+			actualTargetIPsV4, actualTargetIPsV6, actualV4Changed, actualV6Changed := makeNodeSwitchTargetIPs(tt.node, tt.config, tt.zoneEndpoints)
 			assert.Equal(t, tt.expectedTargetIPsV4, actualTargetIPsV4)
 			assert.Equal(t, tt.expectedTargetIPsV6, actualTargetIPsV6)
 			assert.Equal(t, tt.expectedV4Changed, actualV4Changed)
