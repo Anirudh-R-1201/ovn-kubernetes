@@ -321,6 +321,8 @@ ovnkube_compact_mode_enable=${OVNKUBE_COMPACT_MODE_ENABLE:-false}
 ovn_northd_backoff_interval=${OVN_NORTHD_BACKOFF_INTERVAL:-"300"}
 # OVN_ENABLE_SVC_TEMPLATE_SUPPORT - enable svc template support
 ovn_enable_svc_template_support=${OVN_ENABLE_SVC_TEMPLATE_SUPPORT:-true}
+# OVN_ENABLE_TOPOLOGY_AWARE_LB - prefer same-zone endpoints for annotated ClusterIP services
+ovn_enable_topology_aware_lb=${OVN_ENABLE_TOPOLOGY_AWARE_LB:-false}
 
 #OVN_NETWORK_QOS_ENABLE - enable network QoS for ovn-kubernetes
 ovn_network_qos_enable=${OVN_NETWORK_QOS_ENABLE:-false}
@@ -1382,6 +1384,12 @@ ovn-master() {
   fi
   echo "ovn_enable_svc_template_support_flag=${ovn_enable_svc_template_support_flag}"
 
+  ovn_enable_topology_aware_lb_flag=
+  if [[ ${ovn_enable_topology_aware_lb} == "true" ]]; then
+	  ovn_enable_topology_aware_lb_flag="--enable-topology-aware-lb"
+  fi
+  echo "ovn_enable_topology_aware_lb_flag=${ovn_enable_topology_aware_lb_flag}"
+
   ovn_observ_enable_flag=
   if [[ ${ovn_observ_enable} == "true" ]]; then
     ovn_observ_enable_flag="--enable-observability"
@@ -1447,6 +1455,7 @@ ovn-master() {
     ${advertised_udn_isolation_flag} \
     ${ovn_acl_logging_rate_limit_flag} \
     ${ovn_enable_svc_template_support_flag} \
+    ${ovn_enable_topology_aware_lb_flag} \
     ${ovn_observ_enable_flag} \
     ${ovnkube_config_duration_enable_flag} \
     ${ovnkube_enable_multi_external_gateway_flag} \
@@ -1753,6 +1762,12 @@ ovnkube-controller() {
   fi
   echo "ovn_enable_svc_template_support_flag=${ovn_enable_svc_template_support_flag}"
 
+  ovn_enable_topology_aware_lb_flag=
+  if [[ ${ovn_enable_topology_aware_lb} == "true" ]]; then
+	  ovn_enable_topology_aware_lb_flag="--enable-topology-aware-lb"
+  fi
+  echo "ovn_enable_topology_aware_lb_flag=${ovn_enable_topology_aware_lb_flag}"
+
   network_qos_enabled_flag=
   if [[ ${ovn_network_qos_enable} == "true" ]]; then
       network_qos_enabled_flag="--enable-network-qos"
@@ -1801,6 +1816,7 @@ ovnkube-controller() {
     ${ovn_acl_logging_rate_limit_flag} \
     ${ovn_dbs} \
     ${ovn_enable_svc_template_support_flag} \
+    ${ovn_enable_topology_aware_lb_flag} \
     ${ovn_observ_enable_flag} \
     ${ovnkube_config_duration_enable_flag} \
     ${ovnkube_enable_interconnect_flag} \
@@ -2234,6 +2250,12 @@ ovnkube-controller-with-node() {
   fi
   echo "ovn_enable_svc_template_support_flag=${ovn_enable_svc_template_support_flag}"
 
+  ovn_enable_topology_aware_lb_flag=
+  if [[ ${ovn_enable_topology_aware_lb} == "true" ]]; then
+	  ovn_enable_topology_aware_lb_flag="--enable-topology-aware-lb"
+  fi
+  echo "ovn_enable_topology_aware_lb_flag=${ovn_enable_topology_aware_lb_flag}"
+
   network_qos_enabled_flag=
   if [[ ${ovn_network_qos_enable} == "true" ]]; then
       network_qos_enabled_flag="--enable-network-qos"
@@ -2309,6 +2331,7 @@ ovnkube-controller-with-node() {
     ${ovn_acl_logging_rate_limit_flag} \
     ${ovn_dbs} \
     ${ovn_enable_svc_template_support_flag} \
+    ${ovn_enable_topology_aware_lb_flag} \
     ${ovn_observ_enable_flag} \
     ${ovn_encap_ip_flag} \
     ${ovn_encap_port_flag} \

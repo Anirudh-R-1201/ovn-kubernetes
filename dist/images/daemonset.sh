@@ -100,6 +100,7 @@ OVN_ENABLE_INTERCONNECT=
 OVN_ENABLE_OVNKUBE_IDENTITY="true"
 OVN_ENABLE_PERSISTENT_IPS=
 OVN_ENABLE_SVC_TEMPLATE_SUPPORT="true"
+OVN_ENABLE_TOPOLOGY_AWARE_LB="true" #"false" to be updated post testing
 OVN_NETWORK_QOS_ENABLE=
 OVN_ENABLE_DNSNAMERESOLVER="false"
 OVN_NOHOSTSUBNET_LABEL=""
@@ -388,6 +389,9 @@ while [ "$1" != "" ]; do
   --enable-svc-template-support)
     OVN_ENABLE_SVC_TEMPLATE_SUPPORT=$VALUE
     ;;
+  --enable-topology-aware-lb)
+    OVN_ENABLE_TOPOLOGY_AWARE_LB=$VALUE
+    ;;
   --network-qos-enable)
     OVN_NETWORK_QOS_ENABLE=$VALUE
     ;;
@@ -608,6 +612,9 @@ echo "ovn_enable_persistent_ips: ${ovn_enable_persistent_ips}"
 
 ovn_enable_svc_template_support=${OVN_ENABLE_SVC_TEMPLATE_SUPPORT}
 echo "ovn_enable_svc_template_support: ${ovn_enable_svc_template_support}"
+
+ovn_enable_topology_aware_lb=${OVN_ENABLE_TOPOLOGY_AWARE_LB}
+echo "ovn_enable_topology_aware_lb: ${ovn_enable_topology_aware_lb}"
 
 ovn_network_qos_enable=${OVN_NETWORK_QOS_ENABLE}
 echo "ovn_network_qos_enable: ${ovn_network_qos_enable}"
