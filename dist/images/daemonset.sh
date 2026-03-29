@@ -852,6 +852,7 @@ ovn_image=${ovnkube_image} \
   ovn_network_qos_enable=${ovn_network_qos_enable} \
   ovn_enable_persistent_ips=${ovn_enable_persistent_ips} \
   ovn_enable_svc_template_support=${ovn_enable_svc_template_support} \
+  ovn_enable_topology_aware_lb=${ovn_enable_topology_aware_lb} \
   ovn_enable_dnsnameresolver=${ovn_enable_dnsnameresolver} \
   ovn_observ_enable=${ovn_observ_enable} \
   ovn_nohostsubnet_label=${ovn_nohostsubnet_label} \
