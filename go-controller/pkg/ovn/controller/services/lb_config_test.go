@@ -4460,6 +4460,7 @@ func Test_makeNodeSwitchTargetIPs(t *testing.T) {
 		config              *lbConfig
 		node                string
 		zoneEndpoints       util.LBEndpoints
+		regionEndpoints     util.LBEndpoints
 		expectedTargetIPsV4 []string
 		expectedTargetIPsV6 []string
 		expectedV4Changed   bool
@@ -4563,31 +4564,97 @@ func Test_makeNodeSwitchTargetIPs(t *testing.T) {
 			expectedV4Changed:   true,
 			expectedV6Changed:   true,
 		},
-		// ---- topology-aware cases ----
+		// ---- topology-aware 3-tier hierarchy cases ----
 		{
-			name: "topo-aware: zone has endpoints — use zone pool",
+			// Tier 1: node has local endpoints — use them (zero east-west hops)
+			name: "topo-aware tier1: node-local endpoints exist — use node pool",
 			config: &lbConfig{
 				vips:     []string{"1.2.3.4"},
 				protocol: corev1.ProtocolTCP,
 				inport:   80,
 				clusterEndpoints: util.LBEndpoints{
-					V4IPs: []string{"192.168.0.1", "192.168.1.1"},
+					V4IPs: []string{"192.168.0.1", "192.168.1.1", "192.168.2.1"},
 					Port:  8080,
+				},
+				nodeEndpoints: util.PortToLBEndpoints{
+					nodeA: {
+						V4IPs: []string{"192.168.0.1"}, // nodeA has a local pod
+						Port:  8080,
+					},
 				},
 				preferLocalEndpoints: true,
 			},
 			node: nodeA,
 			zoneEndpoints: util.LBEndpoints{
-				V4IPs: []string{"192.168.0.1"}, // only zone-a endpoint
+				V4IPs: []string{"192.168.0.1", "192.168.1.1"}, // zone has 2 pods
 				Port:  8080,
 			},
+			regionEndpoints: util.LBEndpoints{
+				V4IPs: []string{"192.168.0.1", "192.168.1.1", "192.168.2.1"},
+				Port:  8080,
+			},
+			// node-local wins over zone-local
 			expectedTargetIPsV4: []string{"192.168.0.1"},
 			expectedTargetIPsV6: nil,
-			expectedV4Changed:   true, // reduced from 2 → 1
+			expectedV4Changed:   true,
 			expectedV6Changed:   false,
 		},
 		{
-			name: "topo-aware: zone has no endpoints — fall back to cluster pool",
+			// Tier 2: no node-local pod, but zone has endpoints
+			name: "topo-aware tier2: no node-local pod — fall to zone pool",
+			config: &lbConfig{
+				vips:     []string{"1.2.3.4"},
+				protocol: corev1.ProtocolTCP,
+				inport:   80,
+				clusterEndpoints: util.LBEndpoints{
+					V4IPs: []string{"192.168.0.1", "192.168.1.1", "192.168.2.1"},
+					Port:  8080,
+				},
+				nodeEndpoints:        util.PortToLBEndpoints{}, // no local pod on this node
+				preferLocalEndpoints: true,
+			},
+			node: nodeA,
+			zoneEndpoints: util.LBEndpoints{
+				V4IPs: []string{"192.168.0.1", "192.168.1.1"},
+				Port:  8080,
+			},
+			regionEndpoints: util.LBEndpoints{
+				V4IPs: []string{"192.168.0.1", "192.168.1.1", "192.168.2.1"},
+				Port:  8080,
+			},
+			expectedTargetIPsV4: []string{"192.168.0.1", "192.168.1.1"},
+			expectedTargetIPsV6: nil,
+			expectedV4Changed:   true,
+			expectedV6Changed:   false,
+		},
+		{
+			// Tier 3: no node-local, no zone endpoints — fall to region pool
+			name: "topo-aware tier3: no node/zone endpoints — fall to region pool",
+			config: &lbConfig{
+				vips:     []string{"1.2.3.4"},
+				protocol: corev1.ProtocolTCP,
+				inport:   80,
+				clusterEndpoints: util.LBEndpoints{
+					V4IPs: []string{"192.168.0.1", "192.168.1.1", "192.168.2.1"},
+					Port:  8080,
+				},
+				nodeEndpoints:        util.PortToLBEndpoints{},
+				preferLocalEndpoints: true,
+			},
+			node:          nodeA,
+			zoneEndpoints: util.LBEndpoints{}, // zone underprovisioned — empty
+			regionEndpoints: util.LBEndpoints{
+				V4IPs: []string{"192.168.0.1", "192.168.1.1"},
+				Port:  8080,
+			},
+			expectedTargetIPsV4: []string{"192.168.0.1", "192.168.1.1"},
+			expectedTargetIPsV6: nil,
+			expectedV4Changed:   true,
+			expectedV6Changed:   false,
+		},
+		{
+			// All tiers empty — fall back to cluster-wide
+			name: "topo-aware fallback: all locality tiers empty — use cluster pool",
 			config: &lbConfig{
 				vips:     []string{"1.2.3.4"},
 				protocol: corev1.ProtocolTCP,
@@ -4596,24 +4663,25 @@ func Test_makeNodeSwitchTargetIPs(t *testing.T) {
 					V4IPs: []string{"192.168.0.1", "192.168.1.1"},
 					Port:  8080,
 				},
+				nodeEndpoints:        util.PortToLBEndpoints{},
 				preferLocalEndpoints: true,
 			},
 			node:                nodeA,
-			zoneEndpoints:       util.LBEndpoints{}, // empty — no local backends
+			zoneEndpoints:       util.LBEndpoints{},
+			regionEndpoints:     util.LBEndpoints{},
 			expectedTargetIPsV4: []string{"192.168.0.1", "192.168.1.1"},
 			expectedTargetIPsV6: nil,
-			expectedV4Changed:   false, // unchanged — full cluster pool used
+			expectedV4Changed:   false,
 			expectedV6Changed:   false,
 		},
 	}
 	for i, tt := range tc {
 		t.Run(fmt.Sprintf("%d_%s", i, tt.name), func(t *testing.T) {
-			actualTargetIPsV4, actualTargetIPsV6, actualV4Changed, actualV6Changed := makeNodeSwitchTargetIPs(tt.node, tt.config, tt.zoneEndpoints)
+			actualTargetIPsV4, actualTargetIPsV6, actualV4Changed, actualV6Changed := makeNodeSwitchTargetIPs(tt.node, tt.config, tt.zoneEndpoints, tt.regionEndpoints)
 			assert.Equal(t, tt.expectedTargetIPsV4, actualTargetIPsV4)
 			assert.Equal(t, tt.expectedTargetIPsV6, actualTargetIPsV6)
 			assert.Equal(t, tt.expectedV4Changed, actualV4Changed)
 			assert.Equal(t, tt.expectedV6Changed, actualV6Changed)
-
 		})
 	}
 }

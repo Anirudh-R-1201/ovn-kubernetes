@@ -14,9 +14,21 @@ every ClusterIP call crosses the east-west fabric even when a local replica
 exists, adding per-hop overlay encapsulation and inter-node bandwidth cost.
 
 This set of changes implements a **topology-aware load balancer** that gives
-each node a per-node OVN LB whose backend pool is restricted to endpoints in
-the same `topology.kubernetes.io/zone`, with automatic fall-back to the
-cluster-wide pool when the local zone has no healthy backends.
+each node a per-node OVN LB whose backend pool follows a 3-tier locality
+hierarchy, progressively widening scope until healthy backends are found:
+
+```
+Tier 1 – Node-local:   same node as the calling pod (zero east-west hops)
+Tier 2 – Zone-local:   same topology.kubernetes.io/zone  (intra-zone fabric)
+Tier 3 – Region-local: same topology.kubernetes.io/region (intra-region, cross-zone)
+Tier 4 – Cluster-wide: all healthy endpoints (full fallback)
+```
+
+Each tier applies a proportionality guard: if the tier holds less than 50% of
+its expected share of cluster endpoints (mirroring the Kubernetes
+`TopologyAwareHints` check), it is skipped and the next tier is tried.  This
+prevents a single underprovisioned pod from becoming a hotspot while still
+allowing HPA to observe representative CPU load.
 
 The feature is **off by default** and is activated via the
 `--enable-topology-aware-lb` flag, guarded additionally by a per-service
@@ -264,8 +276,11 @@ EnsureLBs() → single atomic OVN NB DB transaction
 |---|---|
 | Feature flag off | No change — existing cluster-wide LB behaviour |
 | Feature flag on, service has no annotation | No change for that service |
-| Feature flag on, service annotated, zone has endpoints | Per-node LB uses zone-local backend pool |
-| Feature flag on, service annotated, zone has **no** endpoints | Automatic fall-back to cluster-wide backend pool |
+| Feature flag on, node has local pod | **Tier 1**: per-node LB uses node-local endpoint (zero east-west hops) |
+| Feature flag on, zone proportionally served | **Tier 2**: per-node LB uses zone-local endpoint pool |
+| Feature flag on, region proportionally served | **Tier 3**: per-node LB uses region-local endpoint pool |
+| Feature flag on, all locality tiers fail proportionality | **Tier 4**: automatic fall-back to cluster-wide backend pool |
+| Zone/region has < 50% of proportional endpoint share | Tier skipped — falls to next tier (prevents single-pod hotspot) |
 | ETP=Local or ITP=Local service | Existing per-node mechanism takes precedence; `preferLocalEndpoints` is not set |
 | Node topology label changes | `nodeTracker.UpdateFunc` detects the change and triggers full service resync |
 

@@ -54,11 +54,20 @@ type lbConfig struct {
 
 // makeNodeSwitchTargetIPs returns the switch-side backend IPs for node, applying
 // traffic-policy and topology-aware filtering in priority order:
+//
 //  1. ETP=Local / ITP=Local  → node-local endpoints only (existing behaviour)
-//  2. preferLocalEndpoints   → zone-local endpoints from zoneEndpoints, with
-//     automatic fall-back to cluster-wide when the zone is empty
-//  3. default               → cluster-wide endpoints (unchanged)
-func makeNodeSwitchTargetIPs(node string, c *lbConfig, zoneEndpoints util.LBEndpoints) (targetIPsV4, targetIPsV6 []string, v4Changed, v6Changed bool) {
+//  2. preferLocalEndpoints   → 3-tier locality hierarchy with automatic fallback:
+//     a. Node-local:   endpoints running on the same node (zero east-west hops)
+//     b. Zone-local:   endpoints in the same topology zone (intra-zone fabric only)
+//     c. Region-local: endpoints in the same topology region (cross-zone, intra-region)
+//     d. Cluster-wide: all endpoints (full fallback when upper tiers are empty)
+//
+// zoneEndpoints and regionEndpoints are pre-filtered by buildZoneEndpoints /
+// buildRegionEndpoints and are already empty when their tier fails the
+// proportionality check, so no additional guard is needed here.
+//
+//  3. default → cluster-wide endpoints (unchanged)
+func makeNodeSwitchTargetIPs(node string, c *lbConfig, zoneEndpoints, regionEndpoints util.LBEndpoints) (targetIPsV4, targetIPsV6 []string, v4Changed, v6Changed bool) {
 	targetIPsV4 = c.clusterEndpoints.V4IPs
 	targetIPsV6 = c.clusterEndpoints.V6IPs
 
@@ -74,12 +83,22 @@ func makeNodeSwitchTargetIPs(node string, c *lbConfig, zoneEndpoints util.LBEndp
 		}
 		targetIPsV4 = localIPsV4
 		targetIPsV6 = localIPsV6
-	} else if c.preferLocalEndpoints && (len(zoneEndpoints.V4IPs)+len(zoneEndpoints.V6IPs) > 0) {
-		// Topology-aware: use same-zone endpoints. The caller guarantees that
-		// zoneEndpoints is non-empty only when the zone actually has healthy
-		// backends, so no additional fall-back is needed here.
-		targetIPsV4 = zoneEndpoints.V4IPs
-		targetIPsV6 = zoneEndpoints.V6IPs
+	} else if c.preferLocalEndpoints {
+		// 3-tier topology-aware hierarchy.
+		// Tier 1 – node-local: eliminates east-west fabric for co-located pods.
+		if nodeLocal, ok := c.nodeEndpoints[node]; ok && (len(nodeLocal.V4IPs)+len(nodeLocal.V6IPs) > 0) {
+			targetIPsV4 = nodeLocal.V4IPs
+			targetIPsV6 = nodeLocal.V6IPs
+			// Tier 2 – zone-local: traffic stays within the topology zone.
+		} else if len(zoneEndpoints.V4IPs)+len(zoneEndpoints.V6IPs) > 0 {
+			targetIPsV4 = zoneEndpoints.V4IPs
+			targetIPsV6 = zoneEndpoints.V6IPs
+			// Tier 3 – region-local: cross-zone but still intra-region.
+		} else if len(regionEndpoints.V4IPs)+len(regionEndpoints.V6IPs) > 0 {
+			targetIPsV4 = regionEndpoints.V4IPs
+			targetIPsV6 = regionEndpoints.V6IPs
+		}
+		// else: fall through to cluster-wide (targetIPsV4/V6 already set at top)
 	}
 
 	// Local endpoints are a subset of cluster endpoints, so it is enough to compare their length
@@ -465,8 +484,8 @@ func buildTemplateLBs(service *corev1.Service, configs []lbConfig, nodes []nodeI
 
 				for _, node := range nodes {
 
-					// Template LBs never have preferLocalEndpoints=true, so zoneEndpoints is empty.
-					switchV4TargetIPs, switchV6TargetIPs, v4Changed, v6Changed := makeNodeSwitchTargetIPs(node.name, &cfg, util.LBEndpoints{})
+					// Template LBs never have preferLocalEndpoints=true, so all locality tiers are empty.
+					switchV4TargetIPs, switchV6TargetIPs, v4Changed, v6Changed := makeNodeSwitchTargetIPs(node.name, &cfg, util.LBEndpoints{}, util.LBEndpoints{})
 					if !switchV4TargetNeedsTemplate && v4Changed {
 						switchV4TargetNeedsTemplate = true
 					}
@@ -635,12 +654,26 @@ func buildTemplateLBs(service *corev1.Service, configs []lbConfig, nodes []nodeI
 // HOWEVER, we need to replace, on each nodes gateway router only, any host-network endpoints with a special loopback address
 // buildZoneEndpoints merges the per-node endpoint pools for all nodes that
 // belong to zone into a single deduplicated LBEndpoints value.
-// Returns an empty LBEndpoints when zone is "" or no nodes in the zone have
-// endpoints, so callers can fall back to cluster-wide endpoints.
-func buildZoneEndpoints(zone string, nodes []nodeInfo, nodeEndpoints map[string]util.LBEndpoints, port int32) util.LBEndpoints {
+// Returns an empty LBEndpoints (triggering fallback to cluster-wide endpoints) when:
+//   - zone is ""
+//   - no nodes in the zone have endpoints
+//   - the zone's endpoint count is less than half its proportional share of
+//     clusterTotal (mirrors Kubernetes TopologyAwareHints proportionality check),
+//     preventing a single underprovisioned zone pod from becoming a hotspot.
+func buildZoneEndpoints(zone string, nodes []nodeInfo, nodeEndpoints map[string]util.LBEndpoints, port int32, clusterTotal int) util.LBEndpoints {
 	if zone == "" {
 		return util.LBEndpoints{}
 	}
+
+	// Count unique zones so we can compute proportional expectation.
+	zoneSet := sets.New[string]()
+	for _, n := range nodes {
+		if n.topologyZone != "" {
+			zoneSet.Insert(n.topologyZone)
+		}
+	}
+	numZones := zoneSet.Len()
+
 	seen := sets.New[string]()
 	result := util.LBEndpoints{Port: port}
 	for _, n := range nodes {
@@ -664,6 +697,79 @@ func buildZoneEndpoints(zone string, nodes []nodeInfo, nodeEndpoints map[string]
 			}
 		}
 	}
+
+	// Proportionality check: if this zone holds fewer than 50% of its expected
+	// share (clusterTotal / numZones), fall back to cluster-wide LB to avoid
+	// routing all zone traffic to a single underprovisioned pod.
+	// Example: 5 zones, 3 pods → expected = 0.6/zone → min = 0.3.
+	// A zone with 1 pod (≥ 0.3) keeps local routing; zones with 0 fall back.
+	// This mirrors the Kubernetes TopologyAwareHints proportionality guard.
+	if numZones > 0 && clusterTotal > 0 {
+		zoneTotal := len(result.V4IPs) + len(result.V6IPs)
+		proportionalMin := float64(clusterTotal) / float64(numZones) * 0.5
+		if float64(zoneTotal) < proportionalMin {
+			return util.LBEndpoints{}
+		}
+	}
+
+	return result
+}
+
+// buildRegionEndpoints merges the per-node endpoint pools for all nodes that
+// share the same topology region into a single deduplicated LBEndpoints value.
+// This provides the third tier (region-local) of the locality hierarchy:
+// node-local → zone-local → region-local → cluster-wide.
+//
+// Returns an empty LBEndpoints (triggering fallback) when:
+//   - region is ""
+//   - no nodes in the region have endpoints
+//   - the region's endpoint count is below 50% of its proportional share
+//     (same proportionality guard as buildZoneEndpoints)
+func buildRegionEndpoints(region string, nodes []nodeInfo, nodeEndpoints map[string]util.LBEndpoints, port int32, clusterTotal int) util.LBEndpoints {
+	if region == "" {
+		return util.LBEndpoints{}
+	}
+
+	regionSet := sets.New[string]()
+	for _, n := range nodes {
+		if n.topologyRegion != "" {
+			regionSet.Insert(n.topologyRegion)
+		}
+	}
+	numRegions := regionSet.Len()
+
+	seen := sets.New[string]()
+	result := util.LBEndpoints{Port: port}
+	for _, n := range nodes {
+		if n.topologyRegion != region {
+			continue
+		}
+		eps, ok := nodeEndpoints[n.name]
+		if !ok {
+			continue
+		}
+		for _, ip := range eps.V4IPs {
+			if !seen.Has(ip) {
+				seen.Insert(ip)
+				result.V4IPs = append(result.V4IPs, ip)
+			}
+		}
+		for _, ip := range eps.V6IPs {
+			if !seen.Has(ip) {
+				seen.Insert(ip)
+				result.V6IPs = append(result.V6IPs, ip)
+			}
+		}
+	}
+
+	if numRegions > 0 && clusterTotal > 0 {
+		regionTotal := len(result.V4IPs) + len(result.V6IPs)
+		proportionalMin := float64(clusterTotal) / float64(numRegions) * 0.5
+		if float64(regionTotal) < proportionalMin {
+			return util.LBEndpoints{}
+		}
+	}
+
 	return result
 }
 
@@ -698,16 +804,17 @@ func buildPerNodeLBs(service *corev1.Service, configs []lbConfig, nodes []nodeIn
 			switchRules := make([]LBRule, 0, len(configs))
 
 			for _, cfg := range configs {
-				// For topology-aware configs, compute the union of endpoints
-				// for nodes that share this node's topology zone.  If the zone
-				// has no healthy backends, buildZoneEndpoints returns an empty
-				// set and makeNodeSwitchTargetIPs falls back to clusterEndpoints.
-				var zoneEps util.LBEndpoints
+				// For topology-aware configs, compute the 3-tier locality pools.
+				// Each builder applies a proportionality guard and returns empty
+				// LBEndpoints when its tier should fall back to the next level.
+				var zoneEps, regionEps util.LBEndpoints
 				if cfg.preferLocalEndpoints {
-					zoneEps = buildZoneEndpoints(node.topologyZone, nodes, cfg.nodeEndpoints, cfg.clusterEndpoints.Port)
+					clusterTotal := len(cfg.clusterEndpoints.V4IPs) + len(cfg.clusterEndpoints.V6IPs)
+					zoneEps = buildZoneEndpoints(node.topologyZone, nodes, cfg.nodeEndpoints, cfg.clusterEndpoints.Port, clusterTotal)
+					regionEps = buildRegionEndpoints(node.topologyRegion, nodes, cfg.nodeEndpoints, cfg.clusterEndpoints.Port, clusterTotal)
 				}
 
-				switchV4TargetIPs, switchV6TargetIPs, _, _ := makeNodeSwitchTargetIPs(node.name, &cfg, zoneEps)
+				switchV4TargetIPs, switchV6TargetIPs, _, _ := makeNodeSwitchTargetIPs(node.name, &cfg, zoneEps, regionEps)
 
 				routerV4TargetIPs, routerV6TargetIPs, _, _ := makeNodeRouterTargetIPs(
 					&node,
