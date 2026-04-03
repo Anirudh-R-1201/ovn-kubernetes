@@ -652,27 +652,45 @@ func buildTemplateLBs(service *corev1.Service, configs []lbConfig, nodes []nodeI
 // - services with external IPs / LoadBalancer Status IPs
 //
 // HOWEVER, we need to replace, on each nodes gateway router only, any host-network endpoints with a special loopback address
+// countTopologyZones returns the number of distinct non-empty topology zones
+// across all nodes. Pre-computed once per service reconciliation so that
+// buildZoneEndpoints does not repeat the O(N) pass for every caller node.
+func countTopologyZones(nodes []nodeInfo) int {
+	s := sets.New[string]()
+	for _, n := range nodes {
+		if n.topologyZone != "" {
+			s.Insert(n.topologyZone)
+		}
+	}
+	return s.Len()
+}
+
+// countTopologyRegions returns the number of distinct non-empty topology regions
+// across all nodes. Pre-computed once per service reconciliation.
+func countTopologyRegions(nodes []nodeInfo) int {
+	s := sets.New[string]()
+	for _, n := range nodes {
+		if n.topologyRegion != "" {
+			s.Insert(n.topologyRegion)
+		}
+	}
+	return s.Len()
+}
+
 // buildZoneEndpoints merges the per-node endpoint pools for all nodes that
 // belong to zone into a single deduplicated LBEndpoints value.
+// numZones must be pre-computed via countTopologyZones to avoid redundant passes.
+//
 // Returns an empty LBEndpoints (triggering fallback to cluster-wide endpoints) when:
 //   - zone is ""
 //   - no nodes in the zone have endpoints
 //   - the zone's endpoint count is less than half its proportional share of
 //     clusterTotal (mirrors Kubernetes TopologyAwareHints proportionality check),
 //     preventing a single underprovisioned zone pod from becoming a hotspot.
-func buildZoneEndpoints(zone string, nodes []nodeInfo, nodeEndpoints map[string]util.LBEndpoints, port int32, clusterTotal int) util.LBEndpoints {
+func buildZoneEndpoints(zone string, nodes []nodeInfo, nodeEndpoints map[string]util.LBEndpoints, port int32, clusterTotal, numZones int) util.LBEndpoints {
 	if zone == "" {
 		return util.LBEndpoints{}
 	}
-
-	// Count unique zones so we can compute proportional expectation.
-	zoneSet := sets.New[string]()
-	for _, n := range nodes {
-		if n.topologyZone != "" {
-			zoneSet.Insert(n.topologyZone)
-		}
-	}
-	numZones := zoneSet.Len()
 
 	seen := sets.New[string]()
 	result := util.LBEndpoints{Port: port}
@@ -701,8 +719,8 @@ func buildZoneEndpoints(zone string, nodes []nodeInfo, nodeEndpoints map[string]
 	// Proportionality check: if this zone holds fewer than 50% of its expected
 	// share (clusterTotal / numZones), fall back to cluster-wide LB to avoid
 	// routing all zone traffic to a single underprovisioned pod.
-	// Example: 5 zones, 3 pods → expected = 0.6/zone → min = 0.3.
-	// A zone with 1 pod (≥ 0.3) keeps local routing; zones with 0 fall back.
+	// Example: 2 zones, 4 pods → expected = 2/zone → min = 1.
+	// A zone with 1 pod (≥ 1) keeps local routing; a zone with 0 falls back.
 	// This mirrors the Kubernetes TopologyAwareHints proportionality guard.
 	if numZones > 0 && clusterTotal > 0 {
 		zoneTotal := len(result.V4IPs) + len(result.V6IPs)
@@ -717,26 +735,17 @@ func buildZoneEndpoints(zone string, nodes []nodeInfo, nodeEndpoints map[string]
 
 // buildRegionEndpoints merges the per-node endpoint pools for all nodes that
 // share the same topology region into a single deduplicated LBEndpoints value.
-// This provides the third tier (region-local) of the locality hierarchy:
-// node-local → zone-local → region-local → cluster-wide.
+// numRegions must be pre-computed via countTopologyRegions.
 //
 // Returns an empty LBEndpoints (triggering fallback) when:
 //   - region is ""
 //   - no nodes in the region have endpoints
 //   - the region's endpoint count is below 50% of its proportional share
 //     (same proportionality guard as buildZoneEndpoints)
-func buildRegionEndpoints(region string, nodes []nodeInfo, nodeEndpoints map[string]util.LBEndpoints, port int32, clusterTotal int) util.LBEndpoints {
+func buildRegionEndpoints(region string, nodes []nodeInfo, nodeEndpoints map[string]util.LBEndpoints, port int32, clusterTotal, numRegions int) util.LBEndpoints {
 	if region == "" {
 		return util.LBEndpoints{}
 	}
-
-	regionSet := sets.New[string]()
-	for _, n := range nodes {
-		if n.topologyRegion != "" {
-			regionSet.Insert(n.topologyRegion)
-		}
-	}
-	numRegions := regionSet.Len()
 
 	seen := sets.New[string]()
 	result := util.LBEndpoints{Port: port}
@@ -787,6 +796,11 @@ func buildPerNodeLBs(service *corev1.Service, configs []lbConfig, nodes []nodeIn
 	cbp := configsByProto(configs)
 	eids := getExternalIDsForLoadBalancer(service, netInfo)
 
+	// Pre-compute topology counts once — avoids an O(N) pass per node per config
+	// inside buildZoneEndpoints / buildRegionEndpoints (would otherwise be O(N²)).
+	numZones := countTopologyZones(nodes)
+	numRegions := countTopologyRegions(nodes)
+
 	out := make([]LB, 0, len(nodes)*len(configs))
 
 	// output is one LB per node per protocol with one rule per vip
@@ -810,8 +824,8 @@ func buildPerNodeLBs(service *corev1.Service, configs []lbConfig, nodes []nodeIn
 				var zoneEps, regionEps util.LBEndpoints
 				if cfg.preferLocalEndpoints {
 					clusterTotal := len(cfg.clusterEndpoints.V4IPs) + len(cfg.clusterEndpoints.V6IPs)
-					zoneEps = buildZoneEndpoints(node.topologyZone, nodes, cfg.nodeEndpoints, cfg.clusterEndpoints.Port, clusterTotal)
-					regionEps = buildRegionEndpoints(node.topologyRegion, nodes, cfg.nodeEndpoints, cfg.clusterEndpoints.Port, clusterTotal)
+					zoneEps = buildZoneEndpoints(node.topologyZone, nodes, cfg.nodeEndpoints, cfg.clusterEndpoints.Port, clusterTotal, numZones)
+					regionEps = buildRegionEndpoints(node.topologyRegion, nodes, cfg.nodeEndpoints, cfg.clusterEndpoints.Port, clusterTotal, numRegions)
 				}
 
 				switchV4TargetIPs, switchV6TargetIPs, _, _ := makeNodeSwitchTargetIPs(node.name, &cfg, zoneEps, regionEps)

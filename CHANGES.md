@@ -151,49 +151,90 @@ Inside the per-port loop:
 - **Template LB guard**: `preferLocalEndpoints` is added to the condition that
   forces NodePort services to use per-node LBs instead of template LBs.
 
-#### 3c. New `buildZoneEndpoints()` helper
+#### 3c. New `countTopologyZones()` / `countTopologyRegions()` helpers
+
+```go
+func countTopologyZones(nodes []nodeInfo) int
+func countTopologyRegions(nodes []nodeInfo) int
+```
+
+Count the number of distinct non-empty topology zone/region labels across all
+cluster nodes. Pre-computing these values once per service reconciliation
+avoids repeating an O(N) pass inside every `buildZoneEndpoints` /
+`buildRegionEndpoints` call. Without this, the per-node loop in
+`buildPerNodeLBs` would trigger O(N × configs) redundant iterations over the
+full node list.
+
+#### 3d. New `buildZoneEndpoints()` / `buildRegionEndpoints()` helpers
 
 ```go
 func buildZoneEndpoints(zone string, nodes []nodeInfo,
-    nodeEndpoints map[string]util.LBEndpoints, port int32) util.LBEndpoints
+    nodeEndpoints map[string]util.LBEndpoints,
+    port int32, clusterTotal, numZones int) util.LBEndpoints
+
+func buildRegionEndpoints(region string, nodes []nodeInfo,
+    nodeEndpoints map[string]util.LBEndpoints,
+    port int32, clusterTotal, numRegions int) util.LBEndpoints
 ```
 
-Merges (with IP deduplication) the endpoint pools for every node whose
-`topologyZone` matches `zone`. Returns an empty `LBEndpoints` when:
-- `zone` is `""` (node has no topology label)
-- No node in the zone has endpoints
+Each merges (with IP deduplication) the endpoint pools for every node in the
+given zone/region. Both accept pre-computed `numZones`/`numRegions` counts
+rather than recomputing them internally.
 
-The empty-return sentinel causes `makeNodeSwitchTargetIPs` to fall back to the
-cluster-wide pool automatically, implementing the
-"no healthy local backends → use global pool" guarantee.
+Return an empty `LBEndpoints` when:
+- The label value is `""` (node/zone/region not labelled)
+- No node in the scope has endpoints
+- **Proportionality guard:** the scope holds fewer than 50% of its expected
+  share of `clusterTotal` endpoints (`clusterTotal / numZones * 0.5`), preventing
+  a single underprovisioned pod from becoming a hotspot. Mirrors the
+  Kubernetes `TopologyAwareHints` proportionality check.
 
-#### 3d. Updated `makeNodeSwitchTargetIPs()`
+The empty-return sentinel causes `makeNodeSwitchTargetIPs` to fall through to
+the next tier automatically.
 
-Signature extended with `zoneEndpoints util.LBEndpoints`. The priority order
-is now:
+#### 3e. Updated `makeNodeSwitchTargetIPs()`
+
+Signature extended with `zoneEndpoints, regionEndpoints util.LBEndpoints`.
+The full 4-tier priority order is now:
 
 | Priority | Condition | Target IPs |
 |---|---|---|
 | 1 | `externalTrafficLocal \|\| internalTrafficLocal` | Node-local only (unchanged) |
-| 2 | `preferLocalEndpoints && len(zoneEndpoints) > 0` | Zone-local (new) |
-| 3 | default | Cluster-wide (unchanged) |
+| 2 | `preferLocalEndpoints && nodeEndpoints[node]` non-empty | **Node-local** (new tier 1) |
+| 3 | `preferLocalEndpoints && len(zoneEndpoints) > 0` | **Zone-local** (new tier 2) |
+| 4 | `preferLocalEndpoints && len(regionEndpoints) > 0` | **Region-local** (new tier 3) |
+| 5 | default | Cluster-wide (unchanged) |
 
-#### 3e. Updated `buildPerNodeLBs()`
+Each tier's non-emptiness is guaranteed by the proportionality guard in the
+builder functions — an under-provisioned zone/region returns empty, causing
+automatic fall-through to the wider scope.
 
-For each `(node, proto, config)` triple:
+**Known limitation — router path:** `makeNodeRouterTargetIPs` (used for the
+GatewayRouter LB) is **not** topology-aware. Traffic that enters the cluster
+via a GatewayRouter (e.g. NodePort, LoadBalancer-type services, or shared-GW
+mode ingress) will use cluster-wide endpoints regardless of topology settings.
+For the Online Boutique experiment this is acceptable — all service-to-service
+calls use ClusterIP, which goes through the node switch LB (topology-aware).
+Extending `makeNodeRouterTargetIPs` to apply zone filtering is left as future
+work.
 
-1. **Compute `zoneEps`** via `buildZoneEndpoints` when `cfg.preferLocalEndpoints`.
-2. **Pass `zoneEps`** to the updated `makeNodeSwitchTargetIPs`.
+#### 3f. Updated `buildPerNodeLBs()`
+
+Pre-computes `numZones` and `numRegions` **once** via the new helpers before
+entering the per-node loop, then for each `(node, proto, config)` triple:
+
+1. **Compute `zoneEps` and `regionEps`** via the updated builders when
+   `cfg.preferLocalEndpoints`.
+2. **Pass both** to the updated `makeNodeSwitchTargetIPs`.
 3. **Add topo-aware switch rule branch**: when
    `cfg.preferLocalEndpoints && util.IsClusterIP(vip)`, switch rules use the
-   zone-filtered targets (held in the `switchV4/V6TargetIPs` returned by
-   `makeNodeSwitchTargetIPs`) instead of the cluster-wide `targets`.
+   zone-filtered targets instead of the cluster-wide `targets`.
 4. **Mark LBs as `TopoAware`**: the `Opts.TopoAware` field is set to `true`
    on all LB objects created for a topo-aware config bucket.
 
 The call site inside `buildTemplateLBs` (which never has
-`preferLocalEndpoints=true`) passes `util.LBEndpoints{}` as the third
-argument to preserve the existing behaviour with no data overhead.
+`preferLocalEndpoints=true`) passes `util.LBEndpoints{}` for both zone and
+region endpoints to preserve existing behaviour with no data overhead.
 
 ---
 
@@ -251,12 +292,16 @@ buildServiceLBConfigs()  [if --enable-topology-aware-lb AND annotation="Auto"]
   → clusterIPConfig routed to perNodeConfigs
         │
         ▼
-buildPerNodeLBs()  [for each node]
-  → zoneEps = buildZoneEndpoints("zone-a", nodes, nodeEndpoints, port)
-  → makeNodeSwitchTargetIPs(node, &cfg, zoneEps)
-       ├─ if zoneEps non-empty → returns zoneEps.V4IPs / zoneEps.V6IPs
-       └─ if zoneEps empty     → returns clusterEndpoints (fallback)
-  → switch rule built with zone-filtered (or fallback) targets
+buildPerNodeLBs()  [numZones/numRegions pre-computed once]
+  → zoneEps   = buildZoneEndpoints("zone-a", nodes, nodeEndpoints, port, total, numZones)
+  → regionEps = buildRegionEndpoints("region-1", nodes, nodeEndpoints, port, total, numRegions)
+  → makeNodeSwitchTargetIPs(node, &cfg, zoneEps, regionEps)
+       ├─ if nodeEndpoints[node] non-empty → returns node-local IPs  (tier 1)
+       ├─ if zoneEps non-empty             → returns zone-local IPs   (tier 2)
+       ├─ if regionEps non-empty           → returns region-local IPs (tier 3)
+       └─ else                             → returns clusterEndpoints (tier 4 / fallback)
+  → switch rule built with locality-filtered (or fallback) targets
+  → router rule always uses cluster-wide endpoints (GatewayRouter path not topo-aware)
   → LB.Opts.TopoAware = true
         │
         ▼
