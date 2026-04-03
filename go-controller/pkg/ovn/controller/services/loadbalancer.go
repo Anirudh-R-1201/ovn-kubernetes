@@ -58,8 +58,8 @@ type LBOpts struct {
 	AddressFamily corev1.IPFamily
 
 	// TopoAware marks this LB as topology-aware (zone-local endpoints preferred).
-	// When set, OVN uses (ip_src, ip_dst) selection fields so that ECMP hashing
-	// is stable per source-IP pair, ensuring consistent routing within a zone.
+	// The per-node LB backend list is restricted to zone-local endpoints; OVN's
+	// default 5-tuple ECMP hashing distributes traffic evenly within that list.
 	TopoAware bool
 }
 
@@ -366,9 +366,12 @@ func buildLB(lb *LB) *templateLoadBalancer {
 		"hairpin_snat_ip":    fmt.Sprintf("%s %s", config.Gateway.MasqueradeIPs.V4OVNServiceHairpinMasqueradeIP.String(), config.Gateway.MasqueradeIPs.V6OVNServiceHairpinMasqueradeIP.String()),
 	}
 
-	// Session affinity / topology-aware ECMP selection fields.
-	// Both session-affinity (max timeout) and topology-aware LBs use (ip_src, ip_dst)
-	// hashing so that a given client always lands on the same zone-local backend.
+	// Session affinity selection fields.
+	// Topology-aware LBs intentionally use default (5-tuple) ECMP selection so that
+	// traffic distributes evenly across zone-local backends. The locality constraint
+	// is enforced by the per-node endpoint list, not by connection pinning.
+	// Using (ip_src, ip_dst) here would hash all traffic from a single load-generator
+	// pod to one backend pod, causing artificial saturation.
 	selectionFields := []nbdb.LoadBalancerSelectionFields{}
 	if lb.Opts.AffinityTimeOut > 0 {
 		if lb.Opts.AffinityTimeOut != core.MaxClientIPServiceAffinitySeconds {
@@ -379,14 +382,9 @@ func buildLB(lb *LB) *templateLoadBalancer {
 				nbdb.LoadBalancerSelectionFieldsIPDst,
 			}
 		}
-	} else if lb.Opts.TopoAware {
-		// For topology-aware LBs, use (ip_src, ip_dst) ECMP hashing so that
-		// clients consistently hit the same zone-local backend across reconnects.
-		selectionFields = []nbdb.LoadBalancerSelectionFields{
-			nbdb.LoadBalancerSelectionFieldsIPSrc,
-			nbdb.LoadBalancerSelectionFieldsIPDst,
-		}
 	}
+	// TopoAware does NOT set custom selection_fields — locality is enforced by
+	// the per-node LB backend list (zone-local endpoints only), not by hashing.
 
 	if lb.Opts.Template {
 		options["template"] = "true"

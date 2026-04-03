@@ -306,7 +306,7 @@ buildPerNodeLBs()  [numZones/numRegions pre-computed once]
         │
         ▼
 buildLB()
-  → selectionFields = [ip_src, ip_dst]  (stable ECMP within zone)
+  → selectionFields = []  (default 5-tuple ECMP — distributes evenly within zone-local pool)
         │
         ▼
 EnsureLBs() → single atomic OVN NB DB transaction
