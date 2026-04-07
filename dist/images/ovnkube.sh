@@ -263,6 +263,8 @@ ovn_egressfirewall_enable=${OVN_EGRESSFIREWALL_ENABLE:-false}
 ovn_egressqos_enable=${OVN_EGRESSQOS_ENABLE:-false}
 #OVN_EGRESSSERVICE_ENABLE - enable egress Service for ovn-kubernetes
 ovn_egressservice_enable=${OVN_EGRESSSERVICE_ENABLE:-false}
+#OVN_ENABLE_TOPOLOGY_AWARE_LB - enable topology-aware load balancing for ovn-kubernetes
+ovn_enable_topology_aware_lb=${OVN_ENABLE_TOPOLOGY_AWARE_LB:-false}
 #OVN_MULTI_NETWORK_ENABLE - enable multiple network support for ovn-kubernetes
 ovn_multi_network_enable=${OVN_MULTI_NETWORK_ENABLE:-false}
 #OVN_NETWORK_SEGMENTATION_ENABLE - enable user defined primary networks for ovn-kubernetes
@@ -1344,6 +1346,12 @@ ovn-master() {
 	  egressservice_enabled_flag="--enable-egress-service"
   fi
   echo "egressservice_enabled_flag=${egressservice_enabled_flag}"
+  topo_aware_lb_flag=
+  if [[ ${ovn_enable_topology_aware_lb} == "true" ]]; then
+	  topo_aware_lb_flag="--enable-topology-aware-lb"
+  fi
+  echo "topo_aware_lb_flag=${topo_aware_lb_flag}"
+
 
   ovnkube_master_metrics_bind_address="${metrics_endpoint_ip}:${metrics_master_port}"
   local ovnkube_metrics_tls_opts=""
@@ -1443,6 +1451,7 @@ ovn-master() {
     ${egressip_healthcheck_port_flag} \
     ${egressqos_enabled_flag} \
     ${egressservice_enabled_flag} \
+    ${topo_aware_lb_flag} \
     ${empty_lb_events_flag} \
     ${hybrid_overlay_flags} \
     ${init_node_flags} \
@@ -1693,6 +1702,12 @@ ovnkube-controller() {
 	  egressservice_enabled_flag="--enable-egress-service"
   fi
   echo "egressservice_enabled_flag=${egressservice_enabled_flag}"
+  topo_aware_lb_flag=
+  if [[ ${ovn_enable_topology_aware_lb} == "true" ]]; then
+	  topo_aware_lb_flag="--enable-topology-aware-lb"
+  fi
+  echo "topo_aware_lb_flag=${topo_aware_lb_flag}"
+
 
   ovnkube_master_metrics_bind_address="${metrics_endpoint_ip}:${metrics_master_port}"
   echo "ovnkube_master_metrics_bind_address=${ovnkube_master_metrics_bind_address}"
@@ -1802,6 +1817,7 @@ ovnkube-controller() {
     ${egressip_healthcheck_port_flag} \
     ${egressqos_enabled_flag} \
     ${egressservice_enabled_flag} \
+    ${topo_aware_lb_flag} \
     ${empty_lb_events_flag} \
     ${hybrid_overlay_flags} \
     ${libovsdb_client_logfile_flag} \
@@ -2054,6 +2070,12 @@ ovnkube-controller-with-node() {
 	  egressservice_enabled_flag="--enable-egress-service"
   fi
   echo "egressservice_enabled_flag=${egressservice_enabled_flag}"
+  topo_aware_lb_flag=
+  if [[ ${ovn_enable_topology_aware_lb} == "true" ]]; then
+	  topo_aware_lb_flag="--enable-topology-aware-lb"
+  fi
+  echo "topo_aware_lb_flag=${topo_aware_lb_flag}"
+
 
   netflow_targets=
   if [[ -n ${ovn_netflow_targets} ]]; then
@@ -2309,6 +2331,7 @@ ovnkube-controller-with-node() {
     ${egressip_healthcheck_port_flag} \
     ${egressqos_enabled_flag} \
     ${egressservice_enabled_flag} \
+    ${topo_aware_lb_flag} \
     ${empty_lb_events_flag} \
     ${enable_lflow_cache} \
     ${hybrid_overlay_flags} \
@@ -2413,6 +2436,12 @@ ovn-cluster-manager() {
          egressservice_enabled_flag="--enable-egress-service"
   fi
   echo "egressservice_enabled_flag=${egressservice_enabled_flag}"
+  topo_aware_lb_flag=
+  if [[ ${ovn_enable_topology_aware_lb} == "true" ]]; then
+	  topo_aware_lb_flag="--enable-topology-aware-lb"
+  fi
+  echo "topo_aware_lb_flag=${topo_aware_lb_flag}"
+
 
   anp_enabled_flag=
   if [[ ${ovn_admin_network_policy_enable} == "true" ]]; then
@@ -2592,6 +2621,7 @@ ovn-cluster-manager() {
     ${egressip_healthcheck_port_flag} \
     ${egressqos_enabled_flag} \
     ${egressservice_enabled_flag} \
+    ${topo_aware_lb_flag} \
     ${empty_lb_events_flag} \
     ${hybrid_overlay_flags} \
     ${multicast_enabled_flag} \
@@ -2763,6 +2793,11 @@ ovn-node() {
   egressservice_enabled_flag=
   if [[ ${ovn_egressservice_enable} == "true" ]]; then
 	  egressservice_enabled_flag="--enable-egress-service"
+  fi
+
+  topo_aware_lb_flag=
+  if [[ ${ovn_enable_topology_aware_lb} == "true" ]]; then
+	  topo_aware_lb_flag="--enable-topology-aware-lb"
   fi
 
   multi_network_enabled_flag=
@@ -3032,6 +3067,7 @@ ovn-node() {
         ${egressip_enabled_flag} \
         ${egressip_healthcheck_port_flag} \
         ${egressservice_enabled_flag} \
+        ${topo_aware_lb_flag} \
         ${enable_lflow_cache} \
         ${hybrid_overlay_flags} \
         ${ipfix_config} \
