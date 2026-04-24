@@ -45,10 +45,14 @@ type lbConfig struct {
 	// preferLocalEndpoints is true when the topology-aware LB feature is
 	// enabled and the Service carries the
 	// "service.kubernetes.io/topology-mode: Auto" annotation.
-	// When set, buildPerNodeLBs will build a per-node LB whose backend pool
-	// is restricted to endpoints located in the same topology zone as the
-	// node, falling back to cluster-wide endpoints when the zone has no
-	// healthy backends.
+	// When set, buildPerNodeLBs builds a per-node LB whose backend list is a
+	// WCMP-weighted expansion of all cluster endpoints using a 4:2:1:1 ratio:
+	//   - same-node endpoints  → repeated 4×
+	//   - same-zone endpoints  → repeated 2× (excluding node-local)
+	//   - same-region endpoints → repeated 1× (excluding zone-local)
+	//   - remaining endpoints  → repeated 1×
+	// OVN's equal-weight ECMP over the repeated list approximates the ratio.
+	// Tiers that are empty (or fail the proportionality guard) contribute 0×.
 	preferLocalEndpoints bool
 }
 
@@ -56,15 +60,16 @@ type lbConfig struct {
 // traffic-policy and topology-aware filtering in priority order:
 //
 //  1. ETP=Local / ITP=Local  → node-local endpoints only (existing behaviour)
-//  2. preferLocalEndpoints   → 3-tier locality hierarchy with automatic fallback:
-//     a. Node-local:   endpoints running on the same node (zero east-west hops)
-//     b. Zone-local:   endpoints in the same topology zone (intra-zone fabric only)
-//     c. Region-local: endpoints in the same topology region (cross-zone, intra-region)
-//     d. Cluster-wide: all endpoints (full fallback when upper tiers are empty)
 //
-// zoneEndpoints and regionEndpoints are pre-filtered by buildZoneEndpoints /
-// buildRegionEndpoints and are already empty when their tier fails the
-// proportionality check, so no additional guard is needed here.
+//  2. preferLocalEndpoints   → WCMP 4:2:1:1 weighted backend list:
+//     Each cluster endpoint is repeated according to its locality tier:
+//     - node-local (weight 4): pods running on this node
+//     - zone-local (weight 2): pods in the same topology zone, excluding node-local
+//     - region-local (weight 1): pods in the same topology region, excluding zone
+//     - rest (weight 1): all remaining cluster endpoints
+//     OVN's equal-weight ECMP over the repeated list approximates the 4:2:1:1 ratio.
+//     Tiers that are empty (or fail the proportionality guard in buildZoneEndpoints /
+//     buildRegionEndpoints) contribute zero repetitions.
 //
 //  3. default → cluster-wide endpoints (unchanged)
 func makeNodeSwitchTargetIPs(node string, c *lbConfig, zoneEndpoints, regionEndpoints util.LBEndpoints) (targetIPsV4, targetIPsV6 []string, v4Changed, v6Changed bool) {
@@ -84,28 +89,90 @@ func makeNodeSwitchTargetIPs(node string, c *lbConfig, zoneEndpoints, regionEndp
 		targetIPsV4 = localIPsV4
 		targetIPsV6 = localIPsV6
 	} else if c.preferLocalEndpoints {
-		// 3-tier topology-aware hierarchy.
-		// Tier 1 – node-local: eliminates east-west fabric for co-located pods.
-		if nodeLocal, ok := c.nodeEndpoints[node]; ok && (len(nodeLocal.V4IPs)+len(nodeLocal.V6IPs) > 0) {
-			targetIPsV4 = nodeLocal.V4IPs
-			targetIPsV6 = nodeLocal.V6IPs
-			// Tier 2 – zone-local: traffic stays within the topology zone.
-		} else if len(zoneEndpoints.V4IPs)+len(zoneEndpoints.V6IPs) > 0 {
-			targetIPsV4 = zoneEndpoints.V4IPs
-			targetIPsV6 = zoneEndpoints.V6IPs
-			// Tier 3 – region-local: cross-zone but still intra-region.
-		} else if len(regionEndpoints.V4IPs)+len(regionEndpoints.V6IPs) > 0 {
-			targetIPsV4 = regionEndpoints.V4IPs
-			targetIPsV6 = regionEndpoints.V6IPs
+		// Build a WCMP backend list with weights 4:2:1:1 for
+		// (node-local):(zone-local):(region-local):(rest).
+		// Simulate the ratio by repeating each tier's unique endpoints in the
+		// OVN LB backend list; OVN's equal-weight ECMP distributes traffic
+		// proportionally across repeated entries.
+
+		var nodeV4, nodeV6 []string
+		if nodeLocal, ok := c.nodeEndpoints[node]; ok {
+			nodeV4 = nodeLocal.V4IPs
+			nodeV6 = nodeLocal.V6IPs
 		}
-		// else: fall through to cluster-wide (targetIPsV4/V6 already set at top)
+
+		nodeV4Set := sets.New[string](nodeV4...)
+		nodeV6Set := sets.New[string](nodeV6...)
+
+		zoneOnlyV4 := excludeIPs(zoneEndpoints.V4IPs, nodeV4Set)
+		zoneOnlyV6 := excludeIPs(zoneEndpoints.V6IPs, nodeV6Set)
+
+		zoneV4Set := sets.New[string](zoneEndpoints.V4IPs...)
+		zoneV6Set := sets.New[string](zoneEndpoints.V6IPs...)
+
+		regionOnlyV4 := excludeIPs(regionEndpoints.V4IPs, zoneV4Set)
+		regionOnlyV6 := excludeIPs(regionEndpoints.V6IPs, zoneV6Set)
+
+		regionV4Set := sets.New[string](regionEndpoints.V4IPs...)
+		regionV6Set := sets.New[string](regionEndpoints.V6IPs...)
+
+		restV4 := excludeIPs(c.clusterEndpoints.V4IPs, regionV4Set)
+		restV6 := excludeIPs(c.clusterEndpoints.V6IPs, regionV6Set)
+
+		if v4 := buildWCMPList(nodeV4, zoneOnlyV4, regionOnlyV4, restV4); v4 != nil {
+			targetIPsV4 = v4
+		}
+		if v6 := buildWCMPList(nodeV6, zoneOnlyV6, regionOnlyV6, restV6); v6 != nil {
+			targetIPsV6 = v6
+		}
 	}
 
-	// Local endpoints are a subset of cluster endpoints, so it is enough to compare their length
+	// When WCMP is active the backend list is longer than the cluster list (due to
+	// repetitions), so a length mismatch reliably indicates per-node divergence.
+	// When all tiers fall back to rest-only (weight 1), the result equals the
+	// cluster list and the length is unchanged — no per-node LB is needed.
 	v4Changed = len(targetIPsV4) != len(c.clusterEndpoints.V4IPs)
 	v6Changed = len(targetIPsV6) != len(c.clusterEndpoints.V6IPs)
 
 	return
+}
+
+// excludeIPs returns a new slice containing only the IPs from ips that are
+// not present in the exclude set. Order is preserved.
+func excludeIPs(ips []string, exclude sets.Set[string]) []string {
+	result := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		if !exclude.Has(ip) {
+			result = append(result, ip)
+		}
+	}
+	return result
+}
+
+// buildWCMPList builds a WCMP backend list with weights 4:2:1:1 by repeating
+// each tier's endpoints the corresponding number of times:
+//
+//	nodeIPs     repeated 4×
+//	zoneOnlyIPs repeated 2×
+//	regionOnlyIPs repeated 1×
+//	restIPs     repeated 1×
+//
+// Returns nil when all inputs are empty (no endpoints in any tier).
+func buildWCMPList(nodeIPs, zoneOnlyIPs, regionOnlyIPs, restIPs []string) []string {
+	total := 4*len(nodeIPs) + 2*len(zoneOnlyIPs) + len(regionOnlyIPs) + len(restIPs)
+	if total == 0 {
+		return nil
+	}
+	result := make([]string, 0, total)
+	for i := 0; i < 4; i++ {
+		result = append(result, nodeIPs...)
+	}
+	for i := 0; i < 2; i++ {
+		result = append(result, zoneOnlyIPs...)
+	}
+	result = append(result, regionOnlyIPs...)
+	result = append(result, restIPs...)
+	return result
 }
 
 func makeNodeRouterTargetIPs(node *nodeInfo, c *lbConfig, hostMasqueradeIPV4, hostMasqueradeIPV6 string) (targetIPsV4, targetIPsV6 []string, v4Changed, v6Changed bool) {

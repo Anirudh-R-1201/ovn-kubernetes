@@ -4564,10 +4564,10 @@ func Test_makeNodeSwitchTargetIPs(t *testing.T) {
 			expectedV4Changed:   true,
 			expectedV6Changed:   true,
 		},
-		// ---- topology-aware 3-tier hierarchy cases ----
+		// ---- WCMP 4:2:1:1 topology-aware cases ----
 		{
-			// Tier 1: node has local endpoints — use them (zero east-west hops)
-			name: "topo-aware tier1: node-local endpoints exist — use node pool",
+			// node-local (4×) + zone-only (2×) + region-only (1×) + rest (0, all in region)
+			name: "wcmp: node-local — 4×node + 2×zone-only + 1×region-only",
 			config: &lbConfig{
 				vips:     []string{"1.2.3.4"},
 				protocol: corev1.ProtocolTCP,
@@ -4593,15 +4593,19 @@ func Test_makeNodeSwitchTargetIPs(t *testing.T) {
 				V4IPs: []string{"192.168.0.1", "192.168.1.1", "192.168.2.1"},
 				Port:  8080,
 			},
-			// node-local wins over zone-local
-			expectedTargetIPsV4: []string{"192.168.0.1"},
+			// 4×[0.1] + 2×[1.1] + 1×[2.1] + 0×rest  (rest = cluster \ region = [])
+			expectedTargetIPsV4: []string{
+				"192.168.0.1", "192.168.0.1", "192.168.0.1", "192.168.0.1", // ×4 node
+				"192.168.1.1", "192.168.1.1", // ×2 zone-only
+				"192.168.2.1", // ×1 region-only
+			},
 			expectedTargetIPsV6: nil,
-			expectedV4Changed:   true,
+			expectedV4Changed:   true, // 7 entries vs 3 cluster entries
 			expectedV6Changed:   false,
 		},
 		{
-			// Tier 2: no node-local pod, but zone has endpoints
-			name: "topo-aware tier2: no node-local pod — fall to zone pool",
+			// no node-local: 2×zone-only + 1×region-only + 0×rest (region = cluster)
+			name: "wcmp: no node-local — 2×zone-only + 1×region-only",
 			config: &lbConfig{
 				vips:     []string{"1.2.3.4"},
 				protocol: corev1.ProtocolTCP,
@@ -4622,14 +4626,19 @@ func Test_makeNodeSwitchTargetIPs(t *testing.T) {
 				V4IPs: []string{"192.168.0.1", "192.168.1.1", "192.168.2.1"},
 				Port:  8080,
 			},
-			expectedTargetIPsV4: []string{"192.168.0.1", "192.168.1.1"},
+			// 2×[0.1, 1.1] + 1×[2.1] + 0×rest  (rest = cluster \ region = [])
+			expectedTargetIPsV4: []string{
+				"192.168.0.1", "192.168.1.1", // ×2 zone-only (first pass)
+				"192.168.0.1", "192.168.1.1", // ×2 zone-only (second pass)
+				"192.168.2.1", // ×1 region-only
+			},
 			expectedTargetIPsV6: nil,
-			expectedV4Changed:   true,
+			expectedV4Changed:   true, // 5 entries vs 3 cluster entries
 			expectedV6Changed:   false,
 		},
 		{
-			// Tier 3: no node-local, no zone endpoints — fall to region pool
-			name: "topo-aware tier3: no node/zone endpoints — fall to region pool",
+			// no node/zone: region (1×) + rest (1×) = cluster unchanged
+			name: "wcmp: no node/zone — region(1×) + rest(1×) equals cluster pool",
 			config: &lbConfig{
 				vips:     []string{"1.2.3.4"},
 				protocol: corev1.ProtocolTCP,
@@ -4647,14 +4656,15 @@ func Test_makeNodeSwitchTargetIPs(t *testing.T) {
 				V4IPs: []string{"192.168.0.1", "192.168.1.1"},
 				Port:  8080,
 			},
-			expectedTargetIPsV4: []string{"192.168.0.1", "192.168.1.1"},
+			// 1×[0.1, 1.1] (region-only) + 1×[2.1] (rest) = cluster at equal weight
+			expectedTargetIPsV4: []string{"192.168.0.1", "192.168.1.1", "192.168.2.1"},
 			expectedTargetIPsV6: nil,
-			expectedV4Changed:   true,
+			expectedV4Changed:   false, // 3 entries == 3 cluster entries (no repetition)
 			expectedV6Changed:   false,
 		},
 		{
-			// All tiers empty — fall back to cluster-wide
-			name: "topo-aware fallback: all locality tiers empty — use cluster pool",
+			// all locality tiers empty → rest only (1×) = cluster unchanged
+			name: "wcmp fallback: all locality tiers empty — cluster pool (no change)",
 			config: &lbConfig{
 				vips:     []string{"1.2.3.4"},
 				protocol: corev1.ProtocolTCP,
