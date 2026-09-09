@@ -109,7 +109,7 @@ setting, and bridge count and then `exclude:` combinations. `test.yml` lists eac
 Lanes vary some of:
 
 * Target (`shard-conformance`, `control-plane`, `no-uplink`, `multi-homing`, `bgp`, and others listed in the `include` comments)
-* Local vs shared gateway mode. See [Architecture](../design/architecture.md).
+* Local vs shared gateway mode (`OVN_GATEWAY_MODE` in `test.yml`)
 * IPv4, IPv6, or dual stack
 * `noSnatGW` vs `snatGW`
 * One bridge vs two (`1br` / `2br`)
