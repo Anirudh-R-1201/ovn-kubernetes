@@ -8,16 +8,17 @@ are used to run a subset of the Kubernetes E2E tests on each pull request. The
 local workflow that controls the test run is located in
 [ovn-kubernetes/.github/workflows/test.yml](https://github.com/ovn-kubernetes/ovn-kubernetes/blob/master/.github/workflows/test.yml).
 
-The following tasks are performed:
+The following tasks are performed by that workflow:
 
-- Build OVN-Kubernetes
-- Check out the Kubernetes source tree and compiles some dependencies
+- Lint and verify generated code/mocks
+- Build OVN-Kubernetes images
+- Check out the Kubernetes source tree and compile some dependencies
 - Install KIND
-- Run a matrix of End-To-End Tests using KIND
-- Ensure that documentation builds successfully
+- Run an explicit matrix of end-to-end tests using KIND
 
-The full matrix of e2e tests found [here](https://github.com/ovn-kubernetes/ovn-kubernetes/blob/master/.github/workflows/test.yml)
-are also run periodically (twice daily) using an OVN-Kubernetes build based on the currently merged code base.
+Documentation is not built by `test.yml`. That workflow ignores `docs/**`, `*.md`, and `mkdocs.yml`, so docs-only pull requests never start `ovn-ci`.
+
+The scheduled run (`cron: '0 */12 * * *'`, twice daily) uses the **same** `e2e` `include:` list as pull requests. It is not a larger “full” matrix.
 
 The following sections should help you understand (and if needed modify) the set of tests that run and how to run these
 tests locally.
@@ -119,9 +120,8 @@ through version bump.
 
 # Documentation Build Check
 
-To catch any potential documentation build breakages which would prevent any docs changes
-from being deployed to our GitHub Pages [site](https://github.com/ovn-kubernetes/ovn-kubernetes). The build check will produce the
-html docs and will be available in the job artifacts for review. There is a link printed
-in the job run logs inside the step "Upload Artifact". Download and unzip that locally 
-to view the resulting docs after they are built to see what would be deployed to github
-pages.
+MkDocs is built by [`.github/workflows/docs.yml`](https://github.com/ovn-kubernetes/ovn-kubernetes/blob/master/.github/workflows/docs.yml)
+(`Test Docs Build`), not by `test.yml`. The job runs `mkdocs build --strict` and uploads the `test-mkdocs-site` artifact
+from the step **Upload Artifact (Test)**. Download and unzip that artifact to preview what would be published to
+[ovn-kubernetes.io](https://ovn-kubernetes.io/). Deployment of the versioned site is handled separately by
+`docs-versioning.yml`.
