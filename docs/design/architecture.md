@@ -35,8 +35,8 @@ and more distributed.
         * OVN-Kubernetes component
         * Allocates pod IPs from the node pod subnet already assigned by
         cluster-manager (logical-switch IPAM for the default network)
-        * Watches K8s API for objects - nodes, namespaces, pods, services, endpoints,
-        network policies, CRs
+        * Watches K8s API for objects - nodes, namespaces, pods, services,
+        EndpointSlices, network policies, CRs
         * Translates K8s objects into OVN logical entities - stores them in OVN databases
         * Stores OVN entities in NorthBound Database (NBDB)
         * Does not allocate the per-node pod subnet; that is cluster-manager
@@ -115,11 +115,11 @@ local Southbound database for logical flow information. On large clusters with N
 this means each Southbound database is handling only one connection from its own local
 ovn-controller. This helps OVN-Kubernetes scale horizontally with node count.
 * Performance: The OVN-Kubernetes brain is now local to each node in the cluster, and it is
-storing and processing changes to only those Kubernetes pods, services, endpoints objects
-that are relevant for that node (note: some features like NetworkPolicies need to process
-pods running on other nodes). This in turn means the OVN stack is also processing less data
-thus leading to improved operational latency. Another benefit is that the control plane
-stack is now lighter-weight.
+storing and processing changes to only those Kubernetes pods, services, and EndpointSlice
+objects that are relevant for that node (note: some features like NetworkPolicies need to
+process pods running on other nodes). This in turn means the OVN stack is also processing
+less data thus leading to improved operational latency. Another benefit is that the control
+plane stack is now lighter-weight.
 * Security: Since the infrastructure network traffic between ovn-controller and OVN Southbound
 database is now contained within each node, overall cross-node and cross-cluster
 (HostedControlPlane, ManagedSaaS) chatter is decreased and traffic security can be increased.
