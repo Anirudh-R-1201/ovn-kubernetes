@@ -33,6 +33,8 @@ and more distributed.
 * ovnkube-node pod
     * ovnkube-controller container:
         * OVN-Kubernetes component
+        * In the default Helm interconnect chart this container runs
+        `ovnkube-controller-with-node` (`--init-ovnkube-controller` and `--init-node`)
         * Allocates pod IPs from the node pod subnet already assigned by
         cluster-manager (logical-switch IPAM for the default network)
         * Watches K8s API for objects - nodes, namespaces, pods, services,
@@ -46,16 +48,15 @@ and more distributed.
         * Creates the ovs port on bridge
         * Programs the necessary nftables/iptables rules and gateway service
         OpenFlow on the node's gateway bridge 
-    * nbdb container:
-        * Native OVN component
-        * Runs the OVN NBDB database
+    * nb-ovsdb container:
+        * Native OVN component (Helm/container name; runs the OVN Northbound DB)
         * Stores the logical elements created by ovnkube-controller
         * runs only 1 replica, contains information local to this node
-    * northd container:
+    * ovn-northd container:
         * Native OVN component
         * Converts the OVN logical elements from NBDB to OVN logical flows in SBDB
-    * sbdb container:
-        * Native OVN component
+    * sb-ovsdb container:
+        * Native OVN component (Helm/container name; runs the OVN Southbound DB)
         * Stores the logical flows created by northd
         * runs only 1 replica, contains information local to this node
     * ovn-controller container:
