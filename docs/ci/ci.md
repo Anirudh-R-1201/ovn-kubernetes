@@ -48,8 +48,12 @@ Put flake issue links in an earlier comment or in the PR description. Do not mix
 
 ## Understanding the CI Test Suite
 
-The tests are broken into 2 categories, `shard` tests which execute tests from the Kubernetes E2E test suite and the
-`control-plane` tests which run locally defined tests.
+The tests fall into Kubernetes E2E **shards** (`shard-%` in
+[ovn-kubernetes/test/Makefile](https://github.com/ovn-kubernetes/ovn-kubernetes/blob/master/test/Makefile))
+and **locally defined** suites invoked via `make control-plane` (often with `WHAT=`).
+GitHub `ovn-ci` also has dedicated e2e targets such as `multi-homing`, `node-ip-mac-migration`,
+`external-gateway`, `network-segmentation`, `bgp`, `evpn`, `serial`, and `tools`. Those are not extra
+shard names; they select `make` targets or a focused `WHAT` in `test.yml`.
 
 ### Shard tests
 
@@ -65,7 +69,7 @@ The set of shards may change in the future. Below is an example of the shards at
 - shard-test
   - Single E2E test that matches the name of the test specified with a regex. 
   - When selecting the `shard-test` target, you focus on a specific test by appending `WHAT=<test name>` to the make command.
-  - See bottom of this document for an example.
+  - Examples are in the [Local Testing Guide](../developer-guide/local_testing_guide.md).
 
 Shards use the [E2E framework](https://kubernetes.io/blog/2019/03/22/kubernetes-end-to-end-testing-for-everyone/). By
 selecting a specific shard, you modify ginkgo's `--focus` parameter.
@@ -81,13 +85,14 @@ In addition to the `shard-%` tests, there is also a `control-plane` target in
 Below is a description of this target:
 
 - control-plane
-  - All locally defined tests by default.
-  - You can focus on a specific test by appending `WHAT=<test name>` to the make command.
-  - See bottom of this document for an example.
+  - Locally defined tests, with skip/focus from `e2e-cp.sh`.
+  - Focus with `WHAT=<test name>`. Examples are in the [Local Testing Guide](../developer-guide/local_testing_guide.md).
 
-All local tests are run by `make control-plane`. The local tests are controlled in
+All local tests are run by `make control-plane` when `WHAT` is unset, except suites `e2e-cp.sh` skips unless requested
+(node IP/MAC migration, and other focused suites). GitHub jobs often pass `WHAT` so a lane only runs one of those
+groups. The skip/focus logic lives in
 [ovn-kubernetes/test/scripts/e2e-cp.sh](https://github.com/ovn-kubernetes/ovn-kubernetes/blob/master/test/scripts/e2e-cp.sh)
-and the actual tests are defined in the directory
+and the tests live in
 [ovn-kubernetes/test/e2e/](https://github.com/ovn-kubernetes/ovn-kubernetes/tree/master/test/e2e).
 
 #### Node IP migration tests
@@ -98,16 +103,21 @@ Instead, they must explicitly be requested with `make -C test control-plane WHAT
 
 ### Github CI integration through Github Actions Matrix
 
-Each of these shards and control-plane tests can then be run in a [Github Actions matrix](https://docs.github.com/en/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix) of:
-* Local Gateway Mode and Shared Gateway Mode. See:
-[Enable Node-Local Services Access in Shared Gateway Mode](https://github.com/ovn-kubernetes/ovn-kubernetes/blob/master/docs/design/shared_gw_dgp.md)
-* IPv4 Only, IPv6 Only and Dualstack
-* Disabled SNAT Multiple Gateways or Enabled SNAT Gateways
-* Single bridge or two bridges
+Pull-request and scheduled `e2e` jobs do **not** take a cartesian product of every gateway mode, IP family, SNAT
+setting, and bridge count and then `exclude:` combinations. `test.yml` lists each lane under `strategy.matrix.include`.
 
-To reduce the explosion of tests being run in CI, the test cases run are limited
-using an `exclude:` statement in 
-[ovn-kubernetes/.github/workflows/test.yml](https://github.com/ovn-kubernetes/ovn-kubernetes/blob/master/.github/workflows/test.yml).
+Lanes vary some of:
+
+* Target (`shard-conformance`, `control-plane`, `no-uplink`, `multi-homing`, `bgp`, and others listed in the `include` comments)
+* Local vs shared gateway mode. See [Architecture](../design/architecture.md).
+* IPv4, IPv6, or dual stack
+* `noSnatGW` vs `snatGW`
+* One bridge vs two (`1br` / `2br`)
+* Extra flags (interconnect, route advertisements, network segmentation, DNS name resolver, image family, and others)
+
+Read the current `include:` list in
+[ovn-kubernetes/.github/workflows/test.yml](https://github.com/ovn-kubernetes/ovn-kubernetes/blob/master/.github/workflows/test.yml)
+before adding a lane. Other workflows (`kind-dpu-offload.yml`, `performance-test.yml`) are separate from `ovn-ci`.
 
 # Conformance Tests
 
