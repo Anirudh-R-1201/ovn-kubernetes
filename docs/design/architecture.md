@@ -33,12 +33,13 @@ and more distributed.
 * ovnkube-node pod
     * ovnkube-controller container:
         * OVN-Kubernetes component
-        * Allocates podIP from the podSubnet to each pod in its zone (IPAM)
+        * Allocates pod IPs from the node pod subnet already assigned by
+        cluster-manager (logical-switch IPAM for the default network)
         * Watches K8s API for objects - nodes, namespaces, pods, services, endpoints,
         network policies, CRs
         * Translates K8s objects into OVN logical entities - stores them in OVN databases
         * Stores OVN entities in NorthBound Database (NBDB)
-        * Manages pod subnet allocation to nodes (pod IPAM)
+        * Does not allocate the per-node pod subnet; that is cluster-manager
         * Runs the CNI executable (CNI ADD/DEL)
         * Digests the IPAM annotation set on pod
         * Creates the veth pair for the pod
