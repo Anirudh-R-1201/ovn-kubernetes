@@ -41,10 +41,9 @@ Reporting a new flake is fairly straightforward, but you can use already open is
 It may also be useful sometimes to search through the closed issues to see if the flake was reported
 previously and (not really) fixed, then reopening it with the new job failure.
 
-Only after following these steps ^, you can comment `/retest-failed` on your PR to trigger a retest of the failed tests.
-A rocket emoji reaction on your comment should apper when the retest is triggered.
+Only after following these steps, comment **exactly** `/retest-failed` on the PR (the entire comment body must be that string, nothing else). The retest action ignores comments that only *contain* the command among other text. A rocket reaction is added after a successful trigger; `/retest` reruns completed workflows, `/cancel` cancels in-progress ones.
 
-Before running this command, please reference existing or newly opened issues to justify the retest request.
+Put flake issue links in an earlier comment or in the PR description. Do not mix them into the `/retest-failed` comment.
 
 ## Understanding the CI Test Suite
 
