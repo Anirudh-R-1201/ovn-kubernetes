@@ -93,7 +93,7 @@ and the actual tests are defined in the directory
 
 The node IP migration tests are part of the control-plane tests but due to their impact they cannot be run concurrently
 with other tests and they are disabled when running `make control-plane`.
-Instead, they must explicitly be requested with `make -C test control-plane WHAT="Node IP address migration"`.
+Instead, they must explicitly be requested with `make -C test control-plane WHAT="Node IP and MAC address migration"`. That `WHAT` value must match the skip exception in `test/scripts/e2e-cp.sh`; a shorter name still skips the suite.
 
 ### Github CI integration through Github Actions Matrix
 
