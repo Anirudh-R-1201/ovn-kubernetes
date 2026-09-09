@@ -43,7 +43,8 @@ and more distributed.
         * Digests the IPAM annotation set on pod
         * Creates the veth pair for the pod
         * Creates the ovs port on bridge
-        * Programs the necessary iptables and gateway service flows on a 
+        * Programs the necessary nftables/iptables rules and gateway service
+        OpenFlow on the node's gateway bridge 
     * nbdb container:
         * Native OVN component
         * Runs the OVN NBDB database
