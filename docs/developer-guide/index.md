@@ -40,6 +40,10 @@ Writing and previewing documentation for the OVN-Kubernetes website.
 
 Run unit and end-to-end tests locally using Kind clusters.
 
+**[CI](../ci/index.md)**
+
+Continuous integration testing for OVN-Kubernetes.
+
 **[CI Testing Guide](../ci/ci.md)**
 
 How the CI pipeline works and how to interpret test results.

@@ -121,12 +121,13 @@ before adding a lane. Other workflows (`kind-dpu-offload.yml`, `performance-test
 
 # Conformance Tests
 
-We have a conformance test suit that can be invoked using the `make conformance` command.
-Currently we run the `TestNetworkPolicyV2Conformance` tests there. The actual tests are
-defined in https://github.com/kubernetes-sigs/network-policy-api/tree/master/conformance
-and then invoked from this repo. Any changes to the tests first have to be submitted
-upstream to `network-policy-api` repo and then brought downstream into the ovn-kubernetes repo
-through version bump.
+Network Policy v2 conformance is `make -C test conformance`, which runs `TestNetworkPolicyV2Conformance`
+(`test/conformance/network_policy_v2_test.go`) against the
+[network-policy-api](https://github.com/kubernetes-sigs/network-policy-api/tree/master/conformance)
+suite. Changes to those tests go upstream first, then into this repo via a version bump.
+
+In `ovn-ci`, `make conformance` runs after some shard-style e2e targets when `ipfamily` is not `ipv6`
+(see the e2e job in `test.yml`).
 
 # Documentation Build Check
 
