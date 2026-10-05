@@ -30,9 +30,14 @@ import (
 const ProviderName = "kind"
 
 type kind struct {
+	api.NodeAccess
 	engine   *container.Engine
 	runtime  containerRuntime
 	HostPort *portalloc.PortAllocator
+}
+
+type kindNodeAccess struct {
+	engine *container.Engine
 }
 
 func New() api.Provider {
@@ -41,10 +46,13 @@ func New() api.Provider {
 	}
 	ce := getContainerRuntime()
 	cmdRunner := runner.NewDirectRunner()
+	engine := container.NewEngine(ce.String(), cmdRunner)
 	kind := &kind{
-		engine:   container.NewEngine(ce.String(), cmdRunner),
-		runtime:  ce,
-		HostPort: portalloc.New(1024, 65535)}
+		NodeAccess: &kindNodeAccess{engine: engine},
+		engine:     engine,
+		runtime:    ce,
+		HostPort:   portalloc.New(1024, 65535),
+	}
 	return kind
 }
 
@@ -68,11 +76,11 @@ func (k *kind) GetK8HostPort() uint16 {
 	return k.HostPort.Allocate()
 }
 
-func (k *kind) GetK8NodeNetworkInterface(container string, network api.Network) (api.NetworkInterface, error) {
-	return k.engine.GetNetworkInterface(container, network.Name())
+func (k *kindNodeAccess) GetK8NodeNetworkInterface(nodeName string, network api.Network) (api.NetworkInterface, error) {
+	return k.engine.GetNetworkInterface(nodeName, network.Name())
 }
 
-func (k *kind) ExecK8NodeCommand(nodeName string, cmd []string) (string, error) {
+func (k *kindNodeAccess) ExecK8NodeCommand(nodeName string, cmd []string) (string, error) {
 	return k.engine.ExecContainerCommand(nodeName, cmd)
 }
 
