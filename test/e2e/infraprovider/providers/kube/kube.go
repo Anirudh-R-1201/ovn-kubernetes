@@ -400,8 +400,10 @@ func (k *kube) NewTestContext() api.Context {
 		engine = k.engine.WithTestContext(context)
 	}
 	return &contextKube{
-		TestContext:                      context,
-		ExternalContainerContextProvider: &kubeExternalWorkloadContext{engine: engine},
+		TestContext: context,
+		ExternalContainerContextProvider: &kubeExternalWorkloadContext{
+			kubeExternalWorkloads: &kubeExternalWorkloads{engine: engine},
+		},
 	}
 }
 
@@ -411,14 +413,7 @@ type contextKube struct {
 }
 
 type kubeExternalWorkloadContext struct {
-	engine *container.Engine
-}
-
-func (w *kubeExternalWorkloadContext) containerEngine() *container.Engine {
-	if w.engine == nil {
-		ginkgo.Skip("set OVN_TEST_CONTAINER_HOST to run this spec", 2)
-	}
-	return w.engine
+	*kubeExternalWorkloads
 }
 
 func (w *kubeExternalWorkloadContext) CreateNetwork(name string, subnets ...string) (api.Network, error) {
