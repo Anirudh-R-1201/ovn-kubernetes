@@ -15,17 +15,21 @@ import (
 
 // Provider represents the infrastructure provider
 type Provider interface {
+	NodeAccess
 	ExternalContainerProvider
 	ClusterProvider
 	NewTestContext() Context
 }
 
-type ClusterProvider interface {
-	// PrimaryNetwork returns OVN-Kubernetes primary infrastructure network information
-	PrimaryNetwork() (Network, error)
+type NodeAccess interface {
 	GetK8NodeNetworkInterface(instance string, network Network) (NetworkInterface, error)
 	// ExecK8NodeCommand runs in the node host network namespace and filesystem.
 	ExecK8NodeCommand(nodeName string, cmd []string) (string, error)
+}
+
+type ClusterProvider interface {
+	// PrimaryNetwork returns OVN-Kubernetes primary infrastructure network information
+	PrimaryNetwork() (Network, error)
 	// GetK8HostPort returns a Node port. Requesting a port that maybe exposed in tests to avoid multiple parallel
 	// tests utilizing conflicting ports. It also allows infra provider implementations to set Nodes
 	// allowed port range and therefore comply with cloud provider firewall rules.
