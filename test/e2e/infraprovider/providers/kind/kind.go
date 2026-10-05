@@ -32,6 +32,7 @@ const ProviderName = "kind"
 type kind struct {
 	api.NodeAccess
 	api.NodeInfrastructure
+	api.ExternalContainerProvider
 	engine   *container.Engine
 	runtime  containerRuntime
 	HostPort *portalloc.PortAllocator
@@ -53,11 +54,12 @@ func New() api.Provider {
 	cmdRunner := runner.NewDirectRunner()
 	engine := container.NewEngine(ce.String(), cmdRunner)
 	kind := &kind{
-		NodeAccess:         &kindNodeAccess{engine: engine},
-		NodeInfrastructure: &kindNodeInfrastructure{engine: engine},
-		engine:             engine,
-		runtime:            ce,
-		HostPort:           portalloc.New(1024, 65535),
+		NodeAccess:                &kindNodeAccess{engine: engine},
+		NodeInfrastructure:        &kindNodeInfrastructure{engine: engine},
+		ExternalContainerProvider: engine,
+		engine:                    engine,
+		runtime:                   ce,
+		HostPort:                  portalloc.New(1024, 65535),
 	}
 	return kind
 }
@@ -68,10 +70,6 @@ func (k *kind) Name() string {
 
 func (k *kind) PrimaryNetwork() (api.Network, error) {
 	return k.GetNetwork("kind")
-}
-
-func (k *kind) GetNetwork(name string) (api.Network, error) {
-	return k.engine.GetNetwork(name)
 }
 
 func (k *kind) GetDefaultTimeoutContext() *framework.TimeoutContext {
@@ -88,30 +86,6 @@ func (k *kindNodeAccess) GetK8NodeNetworkInterface(nodeName string, network api.
 
 func (k *kindNodeAccess) ExecK8NodeCommand(nodeName string, cmd []string) (string, error) {
 	return k.engine.ExecContainerCommand(nodeName, cmd)
-}
-
-func (k *kind) ExecExternalContainerCommand(container api.ExternalContainer, cmd []string) (string, error) {
-	return k.engine.ExecExternalContainerCommand(container, cmd)
-}
-
-func (k *kind) ExternalContainerPrimaryInterfaceName() string {
-	return k.engine.ExternalContainerPrimaryInterfaceName()
-}
-
-func (k *kind) GetExternalContainerLogs(container api.ExternalContainer) (string, error) {
-	return k.engine.GetExternalContainerLogs(container)
-}
-
-func (k *kind) GetExternalContainerNetworkInterface(container api.ExternalContainer, network api.Network) (api.NetworkInterface, error) {
-	return k.engine.GetExternalContainerNetworkInterface(container, network)
-}
-
-func (k *kind) GetExternalContainerPort() uint16 {
-	return k.engine.GetExternalContainerPort()
-}
-
-func (k *kind) ListNetworks() ([]string, error) {
-	return k.engine.ListNetworks()
 }
 
 func (k *kind) PreloadImages(imgs []deploymentconfigapi.ImageConfig) {
