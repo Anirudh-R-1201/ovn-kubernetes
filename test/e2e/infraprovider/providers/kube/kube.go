@@ -458,7 +458,3 @@ func isNode(name string) (bool, error) {
 	}
 	return err == nil, err
 }
-
-func (c *contextKube) SetupUnderlay(*framework.Framework, api.Underlay) error {
-	return skip("SetupUnderlay", "no spare host uplink is declared for this cluster")
-}

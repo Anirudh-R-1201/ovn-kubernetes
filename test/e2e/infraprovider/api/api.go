@@ -87,7 +87,6 @@ type ContextCleanUp interface {
 type Context interface {
 	ContextCleanUp
 	ExternalContainerContextProvider
-	ClusterContextProvider
 }
 
 type ExternalContainerContextProvider interface {
