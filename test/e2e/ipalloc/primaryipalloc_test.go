@@ -138,6 +138,27 @@ func TestNoSharedRange(t *testing.T) {
 	}
 }
 
+func TestInitKeepsFamilyWithSharedRange(t *testing.T) {
+	previous := pia
+	t.Cleanup(func() { pia = previous })
+	cs := fake.NewSimpleClientset(getNodesWithIPs([]node{
+		{v4: network{ip: "10.1.253.3", mask: "31"}, v6: network{ip: "fc00:f853:ccd:e793::5", mask: "64"}},
+		{v4: network{ip: "10.1.253.5", mask: "31"}, v6: network{ip: "fc00:f853:ccd:e793::6", mask: "64"}},
+	}))
+	if err := InitPrimaryIPAllocator(cs.CoreV1().Nodes()); !IsNoRangeError(err) {
+		t.Fatalf("InitPrimaryIPAllocator() error = %v, want no-range error", err)
+	}
+	if pia == nil {
+		t.Fatal("allocator is nil")
+	}
+	if pia.v4 != nil || pia.v6 == nil {
+		t.Fatalf("allocator families = (%v, %v), want (nil, available)", pia.v4, pia.v6)
+	}
+	if _, err := pia.AllocateNextV6(); err != nil {
+		t.Fatalf("AllocateNextV6() error = %v", err)
+	}
+}
+
 func TestInvalidNodeIsNotNoRange(t *testing.T) {
 	cs := fake.NewSimpleClientset(&corev1.NodeList{Items: []corev1.Node{
 		getNodeObj("node0", nil, nil),

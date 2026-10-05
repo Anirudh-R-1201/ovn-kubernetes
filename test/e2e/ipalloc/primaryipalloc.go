@@ -36,12 +36,12 @@ func IsNoRangeError(err error) bool {
 // InitPrimaryIPAllocator must be called to init IP allocator(s). Callers must be synchronise.
 func InitPrimaryIPAllocator(nodeClient v1.NodeInterface) error {
 	allocator, err := newPrimaryIPAllocator(nodeClient)
-	if err != nil {
+	if err != nil && !IsNoRangeError(err) {
 		pia = nil
 		return err
 	}
 	pia = allocator
-	return nil
+	return err
 }
 
 func NewPrimaryIPv4() (net.IP, error) {
@@ -62,6 +62,7 @@ func NewPrimaryIPv6() (net.IP, error) {
 // within the subnet of all the K8 nodes.
 func newPrimaryIPAllocator(nodeClient v1.NodeInterface) (*primaryIPAllocator, error) {
 	ipa := &primaryIPAllocator{mu: &sync.Mutex{}, nodeClient: nodeClient}
+	var noRangeErr error
 	nodes, err := nodeClient.List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		return ipa, fmt.Errorf("failed to get a list of node(s): %v", err)
@@ -99,7 +100,8 @@ func newPrimaryIPAllocator(nodeClient v1.NodeInterface) (*primaryIPAllocator, er
 			return ipa, err
 		}
 		if !isIPWithinAllSubnets(ipNets, nextIP) {
-			return ipa, fmt.Errorf("%w: IP %s is not within all Node subnets", errNoRange, nextIP)
+			ipa.v4 = nil
+			noRangeErr = fmt.Errorf("%w: IP %s is not within all Node subnets", errNoRange, nextIP)
 		}
 	}
 	if nodePrimaryIPs.V6.IP != nil {
@@ -112,11 +114,12 @@ func newPrimaryIPAllocator(nodeClient v1.NodeInterface) (*primaryIPAllocator, er
 			return ipa, err
 		}
 		if !isIPWithinAllSubnets(ipNets, nextIP) {
-			return ipa, fmt.Errorf("%w: IP %s is not within all Node subnets", errNoRange, nextIP)
+			ipa.v6 = nil
+			noRangeErr = fmt.Errorf("%w: IP %s is not within all Node subnets", errNoRange, nextIP)
 		}
 	}
 
-	return ipa, nil
+	return ipa, noRangeErr
 }
 
 func getNodePrimaryProviderIPs(nodes []corev1.Node, isIPv6 bool) ([]*net.IPNet, error) {
