@@ -399,38 +399,45 @@ func (k *kube) NewTestContext() api.Context {
 	if k.engine != nil {
 		engine = k.engine.WithTestContext(context)
 	}
-	return &contextKube{TestContext: context, engine: engine}
+	return &contextKube{
+		TestContext:                      context,
+		ExternalContainerContextProvider: &kubeExternalWorkloadContext{engine: engine},
+	}
 }
 
 type contextKube struct {
 	*testcontext.TestContext
+	api.ExternalContainerContextProvider
+}
+
+type kubeExternalWorkloadContext struct {
 	engine *container.Engine
 }
 
-func (c *contextKube) containerEngine() *container.Engine {
-	if c.engine == nil {
+func (w *kubeExternalWorkloadContext) containerEngine() *container.Engine {
+	if w.engine == nil {
 		ginkgo.Skip("set OVN_TEST_CONTAINER_HOST to run this spec", 2)
 	}
-	return c.engine
+	return w.engine
 }
 
-func (c *contextKube) CreateNetwork(name string, subnets ...string) (api.Network, error) {
-	return c.containerEngine().CreateNetwork(name, subnets...)
+func (w *kubeExternalWorkloadContext) CreateNetwork(name string, subnets ...string) (api.Network, error) {
+	return w.containerEngine().CreateNetwork(name, subnets...)
 }
 
-func (c *contextKube) DeleteNetwork(network api.Network) error {
-	return c.containerEngine().DeleteNetwork(network)
+func (w *kubeExternalWorkloadContext) DeleteNetwork(network api.Network) error {
+	return w.containerEngine().DeleteNetwork(network)
 }
 
-func (c *contextKube) CreateExternalContainer(external api.ExternalContainer) (api.ExternalContainer, error) {
-	return c.containerEngine().CreateExternalContainer(external)
+func (w *kubeExternalWorkloadContext) CreateExternalContainer(external api.ExternalContainer) (api.ExternalContainer, error) {
+	return w.containerEngine().CreateExternalContainer(external)
 }
 
-func (c *contextKube) DeleteExternalContainer(external api.ExternalContainer) error {
-	return c.containerEngine().DeleteExternalContainer(external)
+func (w *kubeExternalWorkloadContext) DeleteExternalContainer(external api.ExternalContainer) error {
+	return w.containerEngine().DeleteExternalContainer(external)
 }
 
-func (c *contextKube) AttachNetwork(network api.Network, instance string) (api.NetworkInterface, error) {
+func (w *kubeExternalWorkloadContext) AttachNetwork(network api.Network, instance string) (api.NetworkInterface, error) {
 	node, err := isNode(instance)
 	if err != nil {
 		return api.NetworkInterface{}, err
@@ -438,10 +445,10 @@ func (c *contextKube) AttachNetwork(network api.Network, instance string) (api.N
 	if node {
 		return api.NetworkInterface{}, skip("AttachNetwork", "the provider does not own Node interfaces")
 	}
-	return c.containerEngine().AttachNetwork(network, instance)
+	return w.containerEngine().AttachNetwork(network, instance)
 }
 
-func (c *contextKube) DetachNetwork(network api.Network, instance string) error {
+func (w *kubeExternalWorkloadContext) DetachNetwork(network api.Network, instance string) error {
 	node, err := isNode(instance)
 	if err != nil {
 		return err
@@ -449,7 +456,7 @@ func (c *contextKube) DetachNetwork(network api.Network, instance string) error 
 	if node {
 		return skip("DetachNetwork", "the provider does not own Node interfaces")
 	}
-	return c.containerEngine().DetachNetwork(network, instance)
+	return w.containerEngine().DetachNetwork(network, instance)
 }
 
 func isNode(name string) (bool, error) {
