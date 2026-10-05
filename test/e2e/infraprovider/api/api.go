@@ -15,19 +15,21 @@ import (
 
 // Provider represents the infrastructure provider
 type Provider interface {
-	ExternalContainerProvider
-	ClusterProvider
-	// NewTestContext providers a per test sandbox. Dependent infra test constructs are created within each test and automatically cleaned
-	// after each test.
+	NodeAccess
+	NodeInfrastructure
+	ExternalWorkloads
 	NewTestContext() Context
+	Name() string
+	GetDefaultTimeoutContext() *framework.TimeoutContext
 }
 
-type ClusterProvider interface {
-	// PrimaryNetwork returns OVN-Kubernetes primary infrastructure network information
-	PrimaryNetwork() (Network, error)
+type NodeAccess interface {
 	GetK8NodeNetworkInterface(instance string, network Network) (NetworkInterface, error)
-	// ExecK8NodeCommand executes a command on a K8 Node host network namespace and filesystem
 	ExecK8NodeCommand(nodeName string, cmd []string) (string, error)
+}
+
+type NodeInfrastructure interface {
+	PrimaryNetwork() (Network, error)
 	// GetK8HostPort returns a Node port. Requesting a port that maybe exposed in tests to avoid multiple parallel
 	// tests utilizing conflicting ports. It also allows infra provider implementations to set Nodes
 	// allowed port range and therefore comply with cloud provider firewall rules.
@@ -40,13 +42,9 @@ type ClusterProvider interface {
 	// so that they are available to pods without a runtime pull. Providers
 	// that do not support preloading may implement this as a no-op.
 	PreloadImages(images []deploymentconfigapi.ImageConfig)
-	// Name returns the name of the cluster provider, example 'kind'.
-	Name() string
-	// Get platform specific timeout values
-	GetDefaultTimeoutContext() *framework.TimeoutContext
 }
 
-type ExternalContainerProvider interface {
+type ExternalWorkloads interface {
 	// ListNetworks returns the names of all networks
 	ListNetworks() ([]string, error)
 	// GetNetwork returns a network
