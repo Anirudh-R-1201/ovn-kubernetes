@@ -48,10 +48,11 @@ const (
 )
 
 type kube struct {
-	*kubeNodeAccess
+	api.NodeAccess
 	api.ExternalContainerProvider
-	engine   *container.Engine
-	hostPort *portalloc.PortAllocator
+	nodeAccess *kubeNodeAccess
+	engine     *container.Engine
+	hostPort   *portalloc.PortAllocator
 }
 
 type kubeExternalWorkloads struct {
@@ -66,12 +67,14 @@ type kubeNodeAccess struct {
 }
 
 func New() api.Provider {
+	nodeAccess := &kubeNodeAccess{
+		primaryNetwork: os.Getenv(primaryNetworkEnvVar),
+		nodeShells:     map[string]*corev1.Pod{},
+	}
 	engine := newContainerEngine()
 	return &kube{
-		kubeNodeAccess: &kubeNodeAccess{
-			primaryNetwork: os.Getenv(primaryNetworkEnvVar),
-			nodeShells:     map[string]*corev1.Pod{},
-		},
+		NodeAccess:                nodeAccess,
+		nodeAccess:                nodeAccess,
 		ExternalContainerProvider: &kubeExternalWorkloads{engine: engine},
 		engine:                    engine,
 		hostPort:                  portalloc.New(1024, 65535),
@@ -122,7 +125,7 @@ func (k *kube) GetK8HostPort() uint16 {
 }
 
 func (k *kube) PreloadImages(_ []string) {
-	ginkgo.DeferCleanup(k.deleteNodeShells)
+	ginkgo.DeferCleanup(k.nodeAccess.deleteNodeShells)
 }
 
 func (k *kubeNodeAccess) deleteNodeShells() error {
@@ -145,7 +148,7 @@ func (k *kubeNodeAccess) deleteNodeShells() error {
 }
 
 func (k *kube) PrimaryNetwork() (api.Network, error) {
-	return k.GetNetwork(k.primaryNetwork)
+	return k.GetNetwork(k.nodeAccess.primaryNetwork)
 }
 
 func (k *kubeNodeAccess) GetK8NodeNetworkInterface(nodeName string, network api.Network) (api.NetworkInterface, error) {
