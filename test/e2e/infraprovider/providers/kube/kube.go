@@ -48,9 +48,13 @@ const (
 )
 
 type kube struct {
-	engine         *container.Engine
+	*kubeNodeAccess
+	engine   *container.Engine
+	hostPort *portalloc.PortAllocator
+}
+
+type kubeNodeAccess struct {
 	primaryNetwork string
-	hostPort       *portalloc.PortAllocator
 	nodeShellsMu   sync.Mutex
 	nodeShells     map[string]*corev1.Pod
 	nodeShellCall  singleflight.Group
@@ -58,10 +62,12 @@ type kube struct {
 
 func New() api.Provider {
 	return &kube{
-		engine:         newContainerEngine(),
-		primaryNetwork: os.Getenv(primaryNetworkEnvVar),
-		hostPort:       portalloc.New(1024, 65535),
-		nodeShells:     map[string]*corev1.Pod{},
+		kubeNodeAccess: &kubeNodeAccess{
+			primaryNetwork: os.Getenv(primaryNetworkEnvVar),
+			nodeShells:     map[string]*corev1.Pod{},
+		},
+		engine:   newContainerEngine(),
+		hostPort: portalloc.New(1024, 65535),
 	}
 }
 
@@ -112,7 +118,7 @@ func (k *kube) PreloadImages(_ []string) {
 	ginkgo.DeferCleanup(k.deleteNodeShells)
 }
 
-func (k *kube) deleteNodeShells() error {
+func (k *kubeNodeAccess) deleteNodeShells() error {
 	client, err := framework.LoadClientset()
 	if err != nil {
 		return err
@@ -135,7 +141,7 @@ func (k *kube) PrimaryNetwork() (api.Network, error) {
 	return k.containerEngine().GetNetwork(k.primaryNetwork)
 }
 
-func (k *kube) GetK8NodeNetworkInterface(nodeName string, network api.Network) (api.NetworkInterface, error) {
+func (k *kubeNodeAccess) GetK8NodeNetworkInterface(nodeName string, network api.Network) (api.NetworkInterface, error) {
 	if network.Name() != k.primaryNetwork {
 		return api.NetworkInterface{}, skip("GetK8NodeNetworkInterface", "the provider does not attach networks to Nodes")
 	}
@@ -184,7 +190,7 @@ func subnetHolds(subnet string, ip net.IP) bool {
 	return err == nil && network.Contains(ip)
 }
 
-func (k *kube) nodeLinkHolding(nodeName, address string) (string, string, error) {
+func (k *kubeNodeAccess) nodeLinkHolding(nodeName, address string) (string, string, error) {
 	out, err := k.ExecK8NodeCommand(nodeName, []string{"ip", "-j", "addr", "show"})
 	if err != nil {
 		return "", "", err
@@ -216,7 +222,7 @@ func (k *kube) nodeLinkHolding(nodeName, address string) (string, string, error)
 	return name, mac, nil
 }
 
-func (k *kube) ExecK8NodeCommand(nodeName string, cmd []string) (string, error) {
+func (k *kubeNodeAccess) ExecK8NodeCommand(nodeName string, cmd []string) (string, error) {
 	if stopsKubelet(cmd) {
 		return "", skip("ExecK8NodeCommand", "node commands use the kubelet and cannot restart it after stopping it")
 	}
@@ -232,7 +238,7 @@ func stopsKubelet(cmd []string) bool {
 	return len(cmd) >= 3 && cmd[0] == "systemctl" && cmd[1] == "stop" && cmd[2] == "kubelet.service"
 }
 
-func (k *kube) nodeShell(nodeName string) (*corev1.Pod, error) {
+func (k *kubeNodeAccess) nodeShell(nodeName string) (*corev1.Pod, error) {
 	client, err := framework.LoadClientset()
 	if err != nil {
 		return nil, err
@@ -247,7 +253,7 @@ func (k *kube) nodeShell(nodeName string) (*corev1.Pod, error) {
 	})
 }
 
-func (k *kube) nodeShellWithClient(client clientset.Interface, nodeName string, create func() (*corev1.Pod, error)) (*corev1.Pod, error) {
+func (k *kubeNodeAccess) nodeShellWithClient(client clientset.Interface, nodeName string, create func() (*corev1.Pod, error)) (*corev1.Pod, error) {
 	value, err, _ := k.nodeShellCall.Do(nodeName, func() (any, error) {
 		k.nodeShellsMu.Lock()
 		shell := k.nodeShells[nodeName]
@@ -288,7 +294,7 @@ func (k *kube) nodeShellWithClient(client clientset.Interface, nodeName string, 
 	return value.(*corev1.Pod), nil
 }
 
-func (k *kube) createNodeShell(client clientset.Interface, namespace, nodeName, image string) (*corev1.Pod, error) {
+func (k *kubeNodeAccess) createNodeShell(client clientset.Interface, namespace, nodeName, image string) (*corev1.Pod, error) {
 	ctx, cancel := apiCallContext()
 	shell, err := client.CoreV1().Pods(namespace).Create(ctx,
 		nodeShellPod(nodeName, image), metav1.CreateOptions{})

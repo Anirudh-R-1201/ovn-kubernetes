@@ -24,7 +24,7 @@ func TestCreateNodeShellDeletesFailedPod(t *testing.T) {
 		return false, nil, nil
 	})
 
-	shell, err := (&kube{}).createNodeShell(client, "ovn-kubernetes", "node-1", "shell-image")
+	shell, err := (&kubeNodeAccess{}).createNodeShell(client, "ovn-kubernetes", "node-1", "shell-image")
 	if err == nil || shell != nil {
 		t.Fatalf("createNodeShell() = %v, %v, want nil shell and error", shell, err)
 	}
@@ -57,7 +57,7 @@ func TestNodeShellRetriesFailedCleanup(t *testing.T) {
 		}
 		return false, nil, nil
 	})
-	provider := &kube{nodeShells: map[string]*corev1.Pod{}}
+	provider := &kubeNodeAccess{nodeShells: map[string]*corev1.Pod{}}
 	create := func() (*corev1.Pod, error) {
 		return provider.createNodeShell(client, "ovn-kubernetes", "node-1", "shell-image")
 	}
