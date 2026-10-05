@@ -115,7 +115,9 @@ func newPrimaryIPAllocator(nodeClient v1.NodeInterface) (*primaryIPAllocator, er
 		}
 		if !isIPWithinAllSubnets(ipNets, nextIP) {
 			ipa.v6 = nil
-			noRangeErr = fmt.Errorf("%w: IP %s is not within all Node subnets", errNoRange, nextIP)
+			if noRangeErr == nil {
+				noRangeErr = fmt.Errorf("%w: IP %s is not within all Node subnets", errNoRange, nextIP)
+			}
 		}
 	}
 
