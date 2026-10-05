@@ -154,40 +154,19 @@ func (k *kindNodeInfrastructure) StartNode(nodeName string) error {
 func (k *kind) NewTestContext() api.Context {
 	context := &testcontext.TestContext{}
 	ginkgo.DeferCleanup(context.CleanUp)
+	engine := k.engine.WithTestContext(context)
 	ck := &contextKind{
-		TestContext: context,
-		engine:      k.engine.WithTestContext(context),
+		TestContext:                      context,
+		ExternalContainerContextProvider: engine,
+		engine:                           engine,
 	}
 	return ck
 }
 
 type contextKind struct {
 	*testcontext.TestContext
+	api.ExternalContainerContextProvider
 	engine *container.Engine
-}
-
-func (c *contextKind) CreateExternalContainer(container api.ExternalContainer) (api.ExternalContainer, error) {
-	return c.engine.CreateExternalContainer(container)
-}
-
-func (c *contextKind) DeleteExternalContainer(container api.ExternalContainer) error {
-	return c.engine.DeleteExternalContainer(container)
-}
-
-func (c *contextKind) CreateNetwork(name string, subnets ...string) (api.Network, error) {
-	return c.engine.CreateNetwork(name, subnets...)
-}
-
-func (c *contextKind) AttachNetwork(network api.Network, container string) (api.NetworkInterface, error) {
-	return c.engine.AttachNetwork(network, container)
-}
-
-func (c *contextKind) DetachNetwork(network api.Network, container string) error {
-	return c.engine.DetachNetwork(network, container)
-}
-
-func (c *contextKind) DeleteNetwork(network api.Network) error {
-	return c.engine.DeleteNetwork(network)
 }
 
 func (c *contextKind) SetupUnderlay(f *framework.Framework, underlay api.Underlay) error {
