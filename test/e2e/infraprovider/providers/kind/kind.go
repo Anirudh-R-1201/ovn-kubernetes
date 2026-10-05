@@ -31,12 +31,17 @@ const ProviderName = "kind"
 
 type kind struct {
 	api.NodeAccess
+	api.NodeInfrastructure
 	engine   *container.Engine
 	runtime  containerRuntime
 	HostPort *portalloc.PortAllocator
 }
 
 type kindNodeAccess struct {
+	engine *container.Engine
+}
+
+type kindNodeInfrastructure struct {
 	engine *container.Engine
 }
 
@@ -48,10 +53,11 @@ func New() api.Provider {
 	cmdRunner := runner.NewDirectRunner()
 	engine := container.NewEngine(ce.String(), cmdRunner)
 	kind := &kind{
-		NodeAccess: &kindNodeAccess{engine: engine},
-		engine:     engine,
-		runtime:    ce,
-		HostPort:   portalloc.New(1024, 65535),
+		NodeAccess:         &kindNodeAccess{engine: engine},
+		NodeInfrastructure: &kindNodeInfrastructure{engine: engine},
+		engine:             engine,
+		runtime:            ce,
+		HostPort:           portalloc.New(1024, 65535),
 	}
 	return kind
 }
@@ -163,11 +169,11 @@ func kindClusterName() string {
 	return ""
 }
 
-func (k *kind) ShutdownNode(nodeName string) error {
+func (k *kindNodeInfrastructure) ShutdownNode(nodeName string) error {
 	return k.engine.StopContainer(nodeName)
 }
 
-func (k *kind) StartNode(nodeName string) error {
+func (k *kindNodeInfrastructure) StartNode(nodeName string) error {
 	return k.engine.StartContainer(nodeName)
 }
 
