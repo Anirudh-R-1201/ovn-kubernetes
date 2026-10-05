@@ -24,6 +24,7 @@ type ClusterProvider interface {
 	// PrimaryNetwork returns OVN-Kubernetes primary infrastructure network information
 	PrimaryNetwork() (Network, error)
 	GetK8NodeNetworkInterface(instance string, network Network) (NetworkInterface, error)
+	// ExecK8NodeCommand runs in the node host network namespace and filesystem.
 	ExecK8NodeCommand(nodeName string, cmd []string) (string, error)
 	// GetK8HostPort returns a Node port. Requesting a port that maybe exposed in tests to avoid multiple parallel
 	// tests utilizing conflicting ports. It also allows infra provider implementations to set Nodes
