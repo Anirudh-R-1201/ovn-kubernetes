@@ -49,8 +49,13 @@ const (
 
 type kube struct {
 	*kubeNodeAccess
+	api.ExternalContainerProvider
 	engine   *container.Engine
 	hostPort *portalloc.PortAllocator
+}
+
+type kubeExternalWorkloads struct {
+	engine *container.Engine
 }
 
 type kubeNodeAccess struct {
@@ -61,13 +66,15 @@ type kubeNodeAccess struct {
 }
 
 func New() api.Provider {
+	engine := newContainerEngine()
 	return &kube{
 		kubeNodeAccess: &kubeNodeAccess{
 			primaryNetwork: os.Getenv(primaryNetworkEnvVar),
 			nodeShells:     map[string]*corev1.Pod{},
 		},
-		engine:   newContainerEngine(),
-		hostPort: portalloc.New(1024, 65535),
+		ExternalContainerProvider: &kubeExternalWorkloads{engine: engine},
+		engine:                    engine,
+		hostPort:                  portalloc.New(1024, 65535),
 	}
 }
 
@@ -89,11 +96,11 @@ func newContainerEngine() *container.Engine {
 	return container.NewEngine(cmp.Or(os.Getenv(containerRuntimeEnvVar), "docker"), sshRunner)
 }
 
-func (k *kube) containerEngine() *container.Engine {
-	if k.engine == nil {
+func (w *kubeExternalWorkloads) containerEngine() *container.Engine {
+	if w.engine == nil {
 		ginkgo.Skip("set OVN_TEST_CONTAINER_HOST to run this spec", 2)
 	}
-	return k.engine
+	return w.engine
 }
 
 func skip(op, why string) error {
@@ -138,7 +145,7 @@ func (k *kubeNodeAccess) deleteNodeShells() error {
 }
 
 func (k *kube) PrimaryNetwork() (api.Network, error) {
-	return k.containerEngine().GetNetwork(k.primaryNetwork)
+	return k.GetNetwork(k.primaryNetwork)
 }
 
 func (k *kubeNodeAccess) GetK8NodeNetworkInterface(nodeName string, network api.Network) (api.NetworkInterface, error) {
@@ -357,32 +364,32 @@ func nodeShellPod(nodeName, image string) *corev1.Pod {
 	}
 }
 
-func (k *kube) ListNetworks() ([]string, error) {
-	return k.containerEngine().ListNetworks()
+func (w *kubeExternalWorkloads) ListNetworks() ([]string, error) {
+	return w.containerEngine().ListNetworks()
 }
 
-func (k *kube) GetNetwork(name string) (api.Network, error) {
-	return k.containerEngine().GetNetwork(name)
+func (w *kubeExternalWorkloads) GetNetwork(name string) (api.Network, error) {
+	return w.containerEngine().GetNetwork(name)
 }
 
-func (k *kube) GetExternalContainerNetworkInterface(external api.ExternalContainer, network api.Network) (api.NetworkInterface, error) {
-	return k.containerEngine().GetExternalContainerNetworkInterface(external, network)
+func (w *kubeExternalWorkloads) GetExternalContainerNetworkInterface(external api.ExternalContainer, network api.Network) (api.NetworkInterface, error) {
+	return w.containerEngine().GetExternalContainerNetworkInterface(external, network)
 }
 
-func (k *kube) ExecExternalContainerCommand(external api.ExternalContainer, cmd []string) (string, error) {
-	return k.containerEngine().ExecExternalContainerCommand(external, cmd)
+func (w *kubeExternalWorkloads) ExecExternalContainerCommand(external api.ExternalContainer, cmd []string) (string, error) {
+	return w.containerEngine().ExecExternalContainerCommand(external, cmd)
 }
 
-func (k *kube) GetExternalContainerLogs(external api.ExternalContainer) (string, error) {
-	return k.containerEngine().GetExternalContainerLogs(external)
+func (w *kubeExternalWorkloads) GetExternalContainerLogs(external api.ExternalContainer) (string, error) {
+	return w.containerEngine().GetExternalContainerLogs(external)
 }
 
-func (k *kube) GetExternalContainerPort() uint16 {
-	return k.containerEngine().GetExternalContainerPort()
+func (w *kubeExternalWorkloads) GetExternalContainerPort() uint16 {
+	return w.containerEngine().GetExternalContainerPort()
 }
 
-func (k *kube) ExternalContainerPrimaryInterfaceName() string {
-	return k.containerEngine().ExternalContainerPrimaryInterfaceName()
+func (w *kubeExternalWorkloads) ExternalContainerPrimaryInterfaceName() string {
+	return w.containerEngine().ExternalContainerPrimaryInterfaceName()
 }
 
 func (k *kube) NewTestContext() api.Context {
