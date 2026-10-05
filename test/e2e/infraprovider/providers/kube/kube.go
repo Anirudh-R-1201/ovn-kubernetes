@@ -351,14 +351,6 @@ func nodeShellPod(nodeName, image string) *corev1.Pod {
 	}
 }
 
-func (k *kube) ShutdownNode(string) error {
-	return skip("ShutdownNode", "the kube API does not power nodes on or off")
-}
-
-func (k *kube) StartNode(string) error {
-	return skip("StartNode", "the kube API does not power nodes on or off")
-}
-
 func (k *kube) ListNetworks() ([]string, error) {
 	return k.containerEngine().ListNetworks()
 }
