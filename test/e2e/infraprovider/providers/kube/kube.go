@@ -17,9 +17,9 @@ import (
 	"github.com/onsi/ginkgo/v2"
 	"github.com/ovn-kubernetes/ovn-kubernetes/go-controller/pkg/util"
 	"github.com/ovn-kubernetes/ovn-kubernetes/test/e2e/deploymentconfig"
+	"github.com/ovn-kubernetes/ovn-kubernetes/test/e2e/infraprovider"
 	"github.com/ovn-kubernetes/ovn-kubernetes/test/e2e/infraprovider/api"
 	"github.com/ovn-kubernetes/ovn-kubernetes/test/e2e/infraprovider/engine/container"
-	"github.com/ovn-kubernetes/ovn-kubernetes/test/e2e/infraprovider/engine/portalloc"
 	"github.com/ovn-kubernetes/ovn-kubernetes/test/e2e/infraprovider/engine/runner"
 	"github.com/ovn-kubernetes/ovn-kubernetes/test/e2e/infraprovider/engine/testcontext"
 	"golang.org/x/sync/singleflight"
@@ -48,11 +48,9 @@ const (
 )
 
 type kube struct {
-	api.NodeAccess
-	api.ExternalContainerProvider
+	*infraprovider.ComposedProvider
 	nodeAccess *kubeNodeAccess
 	engine     *container.Engine
-	hostPort   *portalloc.PortAllocator
 }
 
 type kubeExternalWorkloads struct {
@@ -72,12 +70,11 @@ func New() api.Provider {
 		nodeShells:     map[string]*corev1.Pod{},
 	}
 	engine := newContainerEngine()
+	external := &kubeExternalWorkloads{engine: engine}
 	return &kube{
-		NodeAccess:                nodeAccess,
-		nodeAccess:                nodeAccess,
-		ExternalContainerProvider: &kubeExternalWorkloads{engine: engine},
-		engine:                    engine,
-		hostPort:                  portalloc.New(1024, 65535),
+		ComposedProvider: infraprovider.NewComposedProvider(ProviderName, nodeAccess.primaryNetwork, nodeAccess, external),
+		nodeAccess:       nodeAccess,
+		engine:           engine,
 	}
 }
 
@@ -112,18 +109,6 @@ func skip(op, why string) error {
 	return err
 }
 
-func (k *kube) Name() string {
-	return ProviderName
-}
-
-func (k *kube) GetDefaultTimeoutContext() *framework.TimeoutContext {
-	return framework.NewTimeoutContext()
-}
-
-func (k *kube) GetK8HostPort() uint16 {
-	return k.hostPort.Allocate()
-}
-
 func (k *kube) PreloadImages(_ []string) {
 	ginkgo.DeferCleanup(k.nodeAccess.deleteNodeShells)
 }
@@ -145,10 +130,6 @@ func (k *kubeNodeAccess) deleteNodeShells() error {
 		}
 	}
 	return errors.Join(errs...)
-}
-
-func (k *kube) PrimaryNetwork() (api.Network, error) {
-	return k.GetNetwork(k.nodeAccess.primaryNetwork)
 }
 
 func (k *kubeNodeAccess) GetK8NodeNetworkInterface(nodeName string, network api.Network) (api.NetworkInterface, error) {
