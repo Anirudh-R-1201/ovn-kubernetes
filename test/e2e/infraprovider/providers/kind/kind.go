@@ -17,6 +17,7 @@ import (
 	"github.com/ovn-kubernetes/ovn-kubernetes/test/e2e/infraprovider"
 	"github.com/ovn-kubernetes/ovn-kubernetes/test/e2e/infraprovider/api"
 	"github.com/ovn-kubernetes/ovn-kubernetes/test/e2e/infraprovider/engine/container"
+	"github.com/ovn-kubernetes/ovn-kubernetes/test/e2e/infraprovider/engine/portalloc"
 	"github.com/ovn-kubernetes/ovn-kubernetes/test/e2e/infraprovider/engine/runner"
 	"github.com/ovn-kubernetes/ovn-kubernetes/test/e2e/infraprovider/engine/testcontext"
 
@@ -29,10 +30,12 @@ import (
 const ProviderName = "kind"
 
 type kind struct {
-	*infraprovider.ComposedProvider
+	api.NodeAccess
 	api.NodeInfrastructure
-	engine  *container.Engine
-	runtime containerRuntime
+	api.ExternalContainerProvider
+	engine   *container.Engine
+	runtime  containerRuntime
+	HostPort *portalloc.PortAllocator
 }
 
 type kindNodeAccess struct {
@@ -50,14 +53,31 @@ func New() api.Provider {
 	ce := getContainerRuntime()
 	cmdRunner := runner.NewDirectRunner()
 	engine := container.NewEngine(ce.String(), cmdRunner)
-	nodeAccess := &kindNodeAccess{engine: engine}
 	kind := &kind{
-		ComposedProvider:   infraprovider.NewComposedProvider(ProviderName, "kind", nodeAccess, engine),
-		NodeInfrastructure: &kindNodeInfrastructure{engine: engine},
-		engine:             engine,
-		runtime:            ce,
+		NodeAccess:                &kindNodeAccess{engine: engine},
+		NodeInfrastructure:        &kindNodeInfrastructure{engine: engine},
+		ExternalContainerProvider: engine,
+		engine:                    engine,
+		runtime:                   ce,
+		HostPort:                  portalloc.New(1024, 65535),
 	}
 	return kind
+}
+
+func (k *kind) Name() string {
+	return ProviderName
+}
+
+func (k *kind) PrimaryNetwork() (api.Network, error) {
+	return k.GetNetwork("kind")
+}
+
+func (k *kind) GetDefaultTimeoutContext() *framework.TimeoutContext {
+	return framework.NewTimeoutContext()
+}
+
+func (k *kind) GetK8HostPort() uint16 {
+	return k.HostPort.Allocate()
 }
 
 func (k *kindNodeAccess) GetK8NodeNetworkInterface(nodeName string, network api.Network) (api.NetworkInterface, error) {
