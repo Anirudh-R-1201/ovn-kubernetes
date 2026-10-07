@@ -44,6 +44,7 @@ type ClusterProvider interface {
 	GetDefaultTimeoutContext() *framework.TimeoutContext
 }
 
+// NodeInfrastructure is optional; providers that do not own node lifecycle leave it unimplemented.
 type NodeInfrastructure interface {
 	ShutdownNode(nodeName string) error
 	StartNode(nodeName string) error
@@ -98,8 +99,9 @@ type ExternalContainerContextProvider interface {
 	DetachNetwork(network Network, instance string) error
 }
 
+// ClusterContextProvider is optional; providers that cannot configure host networking leave it unimplemented.
 type ClusterContextProvider interface {
-	// anything done on the cluster that could be cleaned up after test
+	// SetupUnderlay configures host networking for a test.
 	SetupUnderlay(f *framework.Framework, underlay Underlay) error
 }
 

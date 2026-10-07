@@ -2589,7 +2589,7 @@ chpasswd: { expire: False }
 
 			if topology == udnv1.NetworkTopologyLocalnet {
 				By("setting up the localnet underlay")
-				Expect(providerCtx.SetupUnderlay(fr, infraapi.Underlay{LogicalNetworkName: networkName})).To(Succeed())
+				Expect(infraprovider.SetupUnderlay(providerCtx, fr, infraapi.Underlay{LogicalNetworkName: networkName})).To(Succeed())
 			}
 
 			By("create client VM")

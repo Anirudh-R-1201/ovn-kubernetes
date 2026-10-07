@@ -9,6 +9,7 @@ import (
 	"k8s.io/kubernetes/test/e2e/framework"
 )
 
+// ComposedProvider shares cluster behavior; providers add infrastructure capabilities separately.
 type ComposedProvider struct {
 	api.NodeAccess
 	api.ExternalContainerProvider

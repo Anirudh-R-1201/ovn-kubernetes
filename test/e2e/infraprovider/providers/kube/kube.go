@@ -97,6 +97,7 @@ func newContainerEngine() *container.Engine {
 }
 
 func (w *kubeExternalWorkloads) containerEngine() *container.Engine {
+	// An existing cluster does not imply ownership of an external container host.
 	if w.engine == nil {
 		ginkgo.Skip("set OVN_TEST_CONTAINER_HOST to run this spec", 2)
 	}
