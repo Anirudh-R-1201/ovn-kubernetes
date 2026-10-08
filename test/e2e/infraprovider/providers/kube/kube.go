@@ -17,6 +17,7 @@ import (
 	"github.com/onsi/ginkgo/v2"
 	"github.com/ovn-kubernetes/ovn-kubernetes/go-controller/pkg/util"
 	"github.com/ovn-kubernetes/ovn-kubernetes/test/e2e/deploymentconfig"
+	deploymentconfigapi "github.com/ovn-kubernetes/ovn-kubernetes/test/e2e/deploymentconfig/api"
 	"github.com/ovn-kubernetes/ovn-kubernetes/test/e2e/infraprovider"
 	"github.com/ovn-kubernetes/ovn-kubernetes/test/e2e/infraprovider/api"
 	"github.com/ovn-kubernetes/ovn-kubernetes/test/e2e/infraprovider/engine/container"
@@ -110,7 +111,7 @@ func skip(op, why string) error {
 	return err
 }
 
-func (k *kube) PreloadImages(_ []string) {
+func (k *kube) PreloadImages(_ []deploymentconfigapi.ImageConfig) {
 	ginkgo.DeferCleanup(k.nodeAccess.deleteNodeShells)
 }
 

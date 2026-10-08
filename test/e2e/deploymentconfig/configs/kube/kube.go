@@ -9,7 +9,7 @@ import (
 
 	"github.com/onsi/ginkgo/v2"
 	"github.com/ovn-kubernetes/ovn-kubernetes/test/e2e/deploymentconfig/api"
-	"k8s.io/kubernetes/test/utils/image"
+	"github.com/ovn-kubernetes/ovn-kubernetes/test/e2e/deploymentconfig/configs"
 )
 
 const (
@@ -43,8 +43,15 @@ func (kube) PrimaryInterfaceName() string {
 	return required(primaryInterfaceEnvVar)
 }
 
-func (kube) GetAgnHostContainerImage() string {
-	return image.GetE2EImage(image.Agnhost)
+func (kube) GetImage(imageID api.ImageID) api.ImageConfig {
+	return configs.GetImage(imageID)
+}
+
+// Existing clusters pull test images on demand instead of preloading them.
+func (kube) AddRequiredImage(...api.ImageID) {}
+
+func (kube) GetRequiredImages() []api.ImageConfig {
+	return nil
 }
 
 func (kube) IsConfigurationEnabled(config api.Config) bool {
